@@ -6,2029 +6,967 @@ const { v4: uuidv4 } = require('uuid');
 
 const app = express();
 const server = http.createServer(app);
-
 const wss = new WebSocket.Server({
   server,
-  maxPayload: 64 * 1024
+  maxPayload: 1024 * 1024,
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
 
-/* =========================================================
-   CONFIG
-========================================================= */
-
+// ===================== КОНФИГУРАЦИЯ =====================
 const CONFIG = {
-  PORT: process.env.PORT || 3000,
-
-  WORLD_SIZE: 500,
-
-  MAX_PLAYERS: 50,
-  MAX_SPECTATORS: 20,
-
-  TICK_RATE: 30,
-  BROADCAST_RATE: 15,
-
+  WORLD_SIZE: 600,
+  MAX_PLAYERS: 30,
+  MAX_BOTS: 20,
   MOVE_SPEED: 8,
-  SPRINT_SPEED: 11,
-
   PLAYER_HEIGHT: 1.7,
   PLAYER_EYE_HEIGHT: 1.6,
-  PLAYER_RADIUS: 0.5,
-
-  MAX_HEALTH: 100,
-
-  MIN_PLAYERS_TO_START: 2,
-
-  MAX_MESSAGE_SIZE: 1024,
-
-  MAX_MESSAGES_PER_SECOND: 40,
-
-  ROTATE_RATE_LIMIT: 30,
-
-  PING_RATE_LIMIT: 10,
-
   WEAPONS: {
-    pistol: {
-      name: 'Пистолет',
-      damage: 18,
-      headshot: 2,
-      range: 70,
-      fireRate: 220,
-      magazine: 12,
-      reserve: 60,
-      reload: 1200,
-      spread: 0.035
-    },
-
-    rifle: {
-      name: 'Автомат',
-      damage: 25,
-      headshot: 2,
-      range: 180,
-      fireRate: 100,
-      magazine: 30,
-      reserve: 120,
-      reload: 1800,
-      spread: 0.025
-    },
-
-    sniper: {
-      name: 'Снайперка',
-      damage: 80,
-      headshot: 3,
-      range: 350,
-      fireRate: 900,
-      magazine: 5,
-      reserve: 25,
-      reload: 2200,
-      spread: 0.008
-    },
-
-    shotgun: {
-      name: 'Дробовик',
-      damage: 12,
-      headshot: 1.5,
-      range: 45,
-      fireRate: 850,
-      magazine: 6,
-      reserve: 30,
-      reload: 2000,
-      spread: 0.12,
-      pellets: 8
-    }
+    pistol: { damage: 15, range: 50, fireRate: 200, name: 'Пистолет', spread: 0.05, headshotMultiplier: 2, price: 0 },
+    rifle: { damage: 25, range: 150, fireRate: 100, name: 'Автомат', spread: 0.03, headshotMultiplier: 2, price: 100 },
+    sniper: { damage: 75, range: 300, fireRate: 800, name: 'Снайперка', spread: 0.01, headshotMultiplier: 3, price: 200 },
+    shotgun: { damage: 40, range: 30, fireRate: 400, name: 'Дробовик', spread: 0.1, headshotMultiplier: 1.5, price: 150 },
+    smg: { damage: 20, range: 80, fireRate: 80, name: 'ПП', spread: 0.04, headshotMultiplier: 2, price: 120 },
+    lmg: { damage: 18, range: 120, fireRate: 60, name: 'Пулемёт', spread: 0.06, headshotMultiplier: 2, price: 180 },
   },
-
   ZONE: {
-    startRadius: 245,
-
-    waitBeforeShrink: 30000,
-
-    shrinkSpeed: 7,
-
+    startRadius: 280,
+    shrinkInterval: 30000,
+    shrinkSpeed: 8,
     minRadius: 5,
-
-    damagePerSecond: 8,
-
-    phases: [
-      180,
-      125,
-      85,
-      55,
-      35,
-      20,
-      10,
-      5
-    ]
+    damagePerSecond: 5,
+    phases: [200, 140, 90, 60, 35, 15, 5],
   },
-
-  LOOT_COUNT: 70,
-
-  LOOT_DISTANCE: 4,
-
-  MIN_SPAWN_DISTANCE: 15,
-
-  MAP_MARGIN: 3,
-
-  MATCH_END_DELAY: 5000
+  LOOT_SPAWN_COUNT: 60,
+  MIN_LOOT_DISTANCE: 5,
+  TICK_RATE: 30,
+  BROADCAST_RATE: 10,
+  MAX_AMMO: 100,
+  MIN_PLAYERS_TO_START: 2,
+  MIN_SPAWN_DISTANCE: 8,
+  SPAWN_MARGIN: 10,
+  MAX_MESSAGE_SIZE: 1024,
+  allowRespawn: false,
+  ROTATE_RATE_LIMIT: 30,
+  PING_RATE_LIMIT: 10,
+  SHOOT_RATE_LIMIT: 20,
+  MAX_MESSAGES_PER_SECOND: 30,
+  BOT_AI_INTERVAL: 500, // мс между обновлениями ботов
 };
 
-
-/* =========================================================
-   GAME STATE
-========================================================= */
-
-const game = {
+// ===================== СОСТОЯНИЕ ИГРЫ =====================
+const matchState = {
   status: 'waiting',
-
-  matchId: null,
-
+  id: null,
   players: {},
-
-  loot: [],
-
-  winner: null,
-
-  startedAt: 0,
-
-  endTimer: null,
-
+  bots: {},
   zone: {
-    x: 0,
-    z: 0,
-
-    radius: CONFIG.ZONE.startRadius,
-
-    startX: 0,
-    startZ: 0,
-
-    startRadius: CONFIG.ZONE.startRadius,
-
-    targetX: 0,
-    targetZ: 0,
-
+    x: 0, z: 0, radius: CONFIG.ZONE.startRadius,
     targetRadius: CONFIG.ZONE.startRadius,
-
+    targetX: 0, targetZ: 0,
+    isShrinking: false,
     phase: 0,
-
-    shrinking: false,
-
+    nextShrinkTime: 0,
+    startX: 0, startZ: 0,
+    startRadius: CONFIG.ZONE.startRadius,
     progress: 1,
-
-    nextShrink: 0
+    phaseTargets: CONFIG.ZONE.phases.slice(),
   },
-
-  lastBroadcast: 0
+  loot: [],
+  startTime: null,
+  matchEnding: false,
+  winner: null,
+  endTimer: null,
+  lastTickTime: 0,
+  accumulator: 0,
+  lastBroadcastTime: 0,
+  shopItems: [
+    { id: 'rifle', name: 'Автомат', price: 100, type: 'weapon' },
+    { id: 'sniper', name: 'Снайперка', price: 200, type: 'weapon' },
+    { id: 'shotgun', name: 'Дробовик', price: 150, type: 'weapon' },
+    { id: 'smg', name: 'ПП', price: 120, type: 'weapon' },
+    { id: 'lmg', name: 'Пулемёт', price: 180, type: 'weapon' },
+    { id: 'armor', name: 'Броня +30', price: 80, type: 'armor' },
+    { id: 'medkit', name: 'Аптечка', price: 50, type: 'heal' },
+  ],
 };
 
-
-/* =========================================================
-   UTILS
-========================================================= */
-
-function clamp(v, min, max) {
-  return Math.max(min, Math.min(max, v));
+// ===================== ВСПОМОГАТЕЛЬНЫЕ =====================
+function randomPosition() {
+  const half = CONFIG.WORLD_SIZE / 2 - 10;
+  return {
+    x: (Math.random() - 0.5) * 2 * half,
+    z: (Math.random() - 0.5) * 2 * half,
+  };
 }
 
 function distance2D(a, b) {
-  return Math.hypot(
-    a.x - b.x,
-    a.z - b.z
-  );
+  return Math.sqrt((a.x - b.x) ** 2 + (a.z - b.z) ** 2);
 }
 
-function distance3D(a, b) {
-  return Math.hypot(
-    a.x - b.x,
-    a.y - b.y,
-    a.z - b.z
-  );
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
 }
 
-function randomRange(min, max) {
-  return Math.random() * (max - min) + min;
+function isInZone(pos) {
+  return distance2D(pos, matchState.zone) <= matchState.zone.radius;
 }
 
-function randomPosition() {
-  const half =
-    CONFIG.WORLD_SIZE / 2 -
-    CONFIG.MAP_MARGIN;
-
-  return {
-    x: randomRange(-half, half),
-    z: randomRange(-half, half)
-  };
-}
-
-function insideWorld(pos) {
-  const half = CONFIG.WORLD_SIZE / 2;
-
-  return (
-    pos.x >= -half &&
-    pos.x <= half &&
-    pos.z >= -half &&
-    pos.z <= half
-  );
-}
-
-function insideZone(pos) {
-  return distance2D(pos, game.zone) <= game.zone.radius;
-}
-
-function safeSend(ws, data) {
-  if (
-    ws &&
-    ws.readyState === WebSocket.OPEN
-  ) {
-    try {
-      ws.send(data);
-    } catch {}
-  }
-}
-
-function sendJSON(ws, data) {
-  safeSend(ws, JSON.stringify(data));
-}
-
-
-/* =========================================================
-   PLAYER CREATION
-========================================================= */
-
-function createPlayer(ws, role) {
-  const id = uuidv4();
-
-  return {
-    id,
-
-    ws,
-
-    role,
-
-    state:
-      role === 'player'
-        ? 'waiting'
-        : 'spectator',
-
-    position: {
-      x: 0,
-      z: 0
-    },
-
-    rotation: {
-      yaw: 0,
-      pitch: 0
-    },
-
-    health: 100,
-
-    kills: 0,
-
-    weapon: 'pistol',
-
-    ammo: 12,
-
-    reserveAmmo: 60,
-
-    reloading: false,
-
-    reloadEnd: 0,
-
-    lastShot: 0,
-
-    lastRotate: 0,
-
-    lastPing: 0,
-
-    lastSeen: Date.now(),
-
-    messageCount: 0,
-
-    messageReset: Date.now(),
-
-    input: {
-      forward: false,
-      backward: false,
-      left: false,
-      right: false,
-      sprint: false
-    },
-
-    stats: {
-      damage: 0,
-      shots: 0,
-      hits: 0
-    }
-  };
-}
-
-
-/* =========================================================
-   SPAWN
-========================================================= */
-
-function findSpawn(existing) {
-  const maxAttempts = 500;
-
-  for (let i = 0; i < maxAttempts; i++) {
+function randomSafeSpawn(existing = []) {
+  for (let i = 0; i < 200; i++) {
     const pos = randomPosition();
-
-    if (!insideZone(pos)) {
-      continue;
+    if (!isInZone(pos)) continue;
+    let ok = true;
+    for (const e of existing) {
+      if (distance2D(pos, e) < CONFIG.MIN_SPAWN_DISTANCE) { ok = false; break; }
     }
-
-    let valid = true;
-
-    for (const other of existing) {
-      if (
-        distance2D(pos, other) <
-        CONFIG.MIN_SPAWN_DISTANCE
-      ) {
-        valid = false;
-        break;
-      }
-    }
-
-    if (valid) {
+    if (ok && distance2D(pos, matchState.zone) <= matchState.zone.radius - CONFIG.SPAWN_MARGIN) {
       return pos;
     }
   }
-
-  return {
-    x: game.zone.x,
-    z: game.zone.z
-  };
+  return { x: matchState.zone.x, z: matchState.zone.z };
 }
 
-function generateSpawns(players) {
+function generateSpawnPositions(count) {
   const positions = [];
-
-  for (let i = 0; i < players.length; i++) {
-    positions.push(findSpawn(positions));
+  for (let i = 0; i < count; i++) {
+    positions.push(randomSafeSpawn(positions));
   }
-
   return positions;
 }
 
+// ===================== БОТЫ =====================
+function createBot() {
+  const id = 'bot_' + uuidv4();
+  const pos = randomSafeSpawn([]);
+  const bot = {
+    id,
+    role: 'bot',
+    state: 'alive',
+    position: pos,
+    rotation: { yaw: Math.random() * 2 * Math.PI, pitch: 0 },
+    health: 100,
+    weapon: 'rifle',
+    ammo: 60,
+    kills: 0,
+    lastShotTime: 0,
+    targetId: null,
+    lastSeen: Date.now(),
+    currentInput: { forward: false, backward: false, left: false, right: false },
+    aiTimer: 0,
+  };
+  return bot;
+}
 
-/* =========================================================
-   ZONE
-========================================================= */
+function spawnBots(count) {
+  const bots = {};
+  for (let i = 0; i < count; i++) {
+    const bot = createBot();
+    bots[bot.id] = bot;
+  }
+  return bots;
+}
 
+function updateBotAI(bot, deltaTime) {
+  if (bot.state !== 'alive') return;
+  // Ищем ближайшего врага (игрока или другого бота)
+  let target = null;
+  let minDist = Infinity;
+  const allEntities = { ...matchState.players, ...matchState.bots };
+  for (const id in allEntities) {
+    if (id === bot.id) continue;
+    const entity = allEntities[id];
+    if (entity.role === 'bot' || entity.role === 'player') {
+      if (entity.state !== 'alive') continue;
+      const d = distance2D(bot.position, entity.position);
+      if (d < 150 && d < minDist) {
+        minDist = d;
+        target = entity;
+      }
+    }
+  }
+
+  if (target) {
+    // Поворот в сторону цели
+    const dx = target.position.x - bot.position.x;
+    const dz = target.position.z - bot.position.z;
+    bot.rotation.yaw = Math.atan2(-dx, -dz);
+    // Движение к цели, если далеко
+    if (minDist > 30) {
+      bot.currentInput.forward = true;
+      bot.currentInput.backward = false;
+      bot.currentInput.left = false;
+      bot.currentInput.right = false;
+    } else if (minDist < 20) {
+      bot.currentInput.forward = false;
+      bot.currentInput.backward = true;
+      bot.currentInput.left = false;
+      bot.currentInput.right = false;
+    } else {
+      bot.currentInput.forward = false;
+      bot.currentInput.backward = false;
+      bot.currentInput.left = false;
+      bot.currentInput.right = false;
+    }
+    // Стрельба, если цель близко и есть ammo
+    if (minDist < 80 && bot.ammo > 0) {
+      const now = Date.now();
+      const weapon = CONFIG.WEAPONS[bot.weapon];
+      if (weapon && now - bot.lastShotTime > weapon.fireRate) {
+        bot.lastShotTime = now;
+        // Симулируем выстрел
+        const hit = performBotShot(bot, target);
+        if (hit) {
+          // Уменьшаем патроны
+          bot.ammo--;
+          if (bot.ammo < 0) bot.ammo = 0;
+        }
+      }
+    }
+    bot.targetId = target.id;
+  } else {
+    // Патрулирование: случайное блуждание
+    if (Math.random() < 0.02) {
+      const angle = Math.random() * 2 * Math.PI;
+      bot.rotation.yaw = angle;
+    }
+    bot.currentInput.forward = Math.random() < 0.3;
+    bot.currentInput.backward = false;
+    bot.currentInput.left = false;
+    bot.currentInput.right = false;
+  }
+
+  // Обновляем позицию (применяем движение как для игрока)
+  applyMovement(bot.id, deltaTime);
+}
+
+function performBotShot(bot, target) {
+  const weapon = CONFIG.WEAPONS[bot.weapon];
+  if (!weapon) return false;
+  const dist = distance2D(bot.position, target.position);
+  if (dist > weapon.range) return false;
+  // Проверка попадания с учётом разброса
+  const hitChance = Math.max(0, 1 - (dist / weapon.range) * 0.5);
+  if (Math.random() > hitChance) return false;
+
+  // Урон
+  let damage = weapon.damage;
+  // Проверка headshot (случайно)
+  const isHeadshot = Math.random() < 0.1;
+  if (isHeadshot) damage *= (weapon.headshotMultiplier || 2);
+  damage = Math.round(damage);
+
+  const targetPlayer = matchState.players[target.id];
+  if (targetPlayer && targetPlayer.state === 'alive') {
+    targetPlayer.health = clamp(targetPlayer.health - damage, 0, 100);
+    if (targetPlayer.health <= 0) {
+      targetPlayer.state = 'dead';
+      targetPlayer.currentInput = { forward: false, backward: false, left: false, right: false };
+      bot.kills = (bot.kills || 0) + 1;
+      broadcastDeath(targetPlayer.id, 'bullet', bot.id);
+      checkMatchEnd();
+    }
+    broadcastHit(bot.id, targetPlayer.id, damage, isHeadshot, bot.weapon);
+    return true;
+  }
+  // Проверка ботов (взаимодействие между ботами)
+  const targetBot = matchState.bots[target.id];
+  if (targetBot && targetBot.state === 'alive') {
+    targetBot.health = clamp(targetBot.health - damage, 0, 100);
+    if (targetBot.health <= 0) {
+      targetBot.state = 'dead';
+      bot.kills = (bot.kills || 0) + 1;
+      // Уведомление о смерти бота
+      broadcastDeath(targetBot.id, 'bullet', bot.id);
+      // Удаляем мёртвого бота через некоторое время
+      setTimeout(() => {
+        if (matchState.bots[targetBot.id]) {
+          delete matchState.bots[targetBot.id];
+        }
+      }, 5000);
+    }
+    broadcastHit(bot.id, targetBot.id, damage, isHeadshot, bot.weapon);
+    return true;
+  }
+  return false;
+}
+
+// ===================== ДВИЖЕНИЕ (общее для всех) =====================
+function applyMovement(entityId, deltaTime) {
+  const entity = matchState.players[entityId] || matchState.bots[entityId];
+  if (!entity || entity.state !== 'alive') return;
+  const input = entity.currentInput || { forward: false, backward: false, left: false, right: false };
+  const yaw = entity.rotation.yaw || 0;
+  const cos = Math.cos(yaw);
+  const sin = Math.sin(yaw);
+  let forwardX = -sin;
+  let forwardZ = -cos;
+  let rightX = cos;
+  let rightZ = -sin;
+  let moveX = 0, moveZ = 0;
+  if (input.forward) { moveX += forwardX; moveZ += forwardZ; }
+  if (input.backward) { moveX -= forwardX; moveZ -= forwardZ; }
+  if (input.left) { moveX -= rightX; moveZ -= rightZ; }
+  if (input.right) { moveX += rightX; moveZ += rightZ; }
+  const len = Math.sqrt(moveX*moveX + moveZ*moveZ);
+  if (len > 0.001) {
+    moveX = (moveX / len) * CONFIG.MOVE_SPEED * deltaTime;
+    moveZ = (moveZ / len) * CONFIG.MOVE_SPEED * deltaTime;
+    entity.position.x = clamp(entity.position.x + moveX, -CONFIG.WORLD_SIZE/2 + 1, CONFIG.WORLD_SIZE/2 - 1);
+    entity.position.z = clamp(entity.position.z + moveZ, -CONFIG.WORLD_SIZE/2 + 1, CONFIG.WORLD_SIZE/2 - 1);
+  }
+}
+
+// ===================== ЗОНА (обновлена) =====================
 function initZone() {
-  const z = game.zone;
-
-  z.x = 0;
-  z.z = 0;
-
+  const z = matchState.zone;
+  z.x = 0; z.z = 0;
   z.radius = CONFIG.ZONE.startRadius;
-
-  z.startX = 0;
-  z.startZ = 0;
-
-  z.startRadius =
-    CONFIG.ZONE.startRadius;
-
-  z.targetX = 0;
-  z.targetZ = 0;
-
-  z.targetRadius =
-    CONFIG.ZONE.startRadius;
-
+  z.targetRadius = CONFIG.ZONE.startRadius;
+  z.targetX = 0; z.targetZ = 0;
+  z.isShrinking = false;
   z.phase = 0;
-
-  z.shrinking = false;
-
+  z.nextShrinkTime = Date.now() + CONFIG.ZONE.shrinkInterval;
+  z.startX = 0; z.startZ = 0;
+  z.startRadius = CONFIG.ZONE.startRadius;
   z.progress = 1;
-
-  z.nextShrink =
-    Date.now() +
-    CONFIG.ZONE.waitBeforeShrink;
+  z.phaseTargets = CONFIG.ZONE.phases.slice();
 }
 
-function beginZoneShrink() {
-  const z = game.zone;
-
-  if (
-    z.phase >=
-    CONFIG.ZONE.phases.length
-  ) {
+function updateZone(deltaTime) {
+  if (matchState.status !== 'playing') return;
+  const now = Date.now();
+  const z = matchState.zone;
+  if (z.radius <= CONFIG.ZONE.minRadius) {
+    z.radius = CONFIG.ZONE.minRadius;
+    z.isShrinking = false;
     return;
   }
-
-  const targetRadius =
-    CONFIG.ZONE.phases[z.phase];
-
-  if (targetRadius >= z.radius) {
-    z.phase++;
-    return;
+  if (!z.isShrinking && now >= z.nextShrinkTime) {
+    const nextPhase = z.phase;
+    if (nextPhase < z.phaseTargets.length) {
+      z.targetRadius = z.phaseTargets[nextPhase];
+      if (z.targetRadius >= z.radius) z.targetRadius = z.radius / 2;
+      // Новый центр
+      let newX, newZ, found = false;
+      for (let i = 0; i < 200; i++) {
+        const angle = Math.random() * 2 * Math.PI;
+        const dist = Math.random() * (z.radius - z.targetRadius);
+        const cx = z.x + Math.cos(angle) * dist;
+        const cz = z.z + Math.sin(angle) * dist;
+        if (cx - z.targetRadius >= -CONFIG.WORLD_SIZE/2 && cx + z.targetRadius <= CONFIG.WORLD_SIZE/2 &&
+            cz - z.targetRadius >= -CONFIG.WORLD_SIZE/2 && cz + z.targetRadius <= CONFIG.WORLD_SIZE/2) {
+          newX = cx; newZ = cz; found = true; break;
+        }
+      }
+      if (!found) {
+        newX = clamp(0, -CONFIG.WORLD_SIZE/2 + z.targetRadius, CONFIG.WORLD_SIZE/2 - z.targetRadius);
+        newZ = clamp(0, -CONFIG.WORLD_SIZE/2 + z.targetRadius, CONFIG.WORLD_SIZE/2 - z.targetRadius);
+      }
+      z.startX = z.x; z.startZ = z.z; z.startRadius = z.radius;
+      z.targetX = newX; z.targetZ = newZ;
+      z.progress = 0;
+      z.isShrinking = true;
+      z.phase++;
+    } else {
+      z.isShrinking = false;
+    }
   }
-
-  const maxCenterMove =
-    Math.max(
-      0,
-      z.radius - targetRadius
-    );
-
-  const angle =
-    Math.random() * Math.PI * 2;
-
-  const moveDistance =
-    Math.random() *
-    maxCenterMove *
-    0.65;
-
-  const newX =
-    z.x +
-    Math.cos(angle) *
-    moveDistance;
-
-  const newZ =
-    z.z +
-    Math.sin(angle) *
-    moveDistance;
-
-  z.startX = z.x;
-  z.startZ = z.z;
-
-  z.startRadius = z.radius;
-
-  z.targetX = clamp(
-    newX,
-    -CONFIG.WORLD_SIZE / 2 + targetRadius,
-    CONFIG.WORLD_SIZE / 2 - targetRadius
-  );
-
-  z.targetZ = clamp(
-    newZ,
-    -CONFIG.WORLD_SIZE / 2 + targetRadius,
-    CONFIG.WORLD_SIZE / 2 - targetRadius
-  );
-
-  z.targetRadius = targetRadius;
-
-  z.progress = 0;
-
-  z.shrinking = true;
-
-  z.phase++;
-}
-
-function updateZone(dt) {
-  if (game.status !== 'playing') {
-    return;
-  }
-
-  const z = game.zone;
-
-  if (
-    !z.shrinking &&
-    Date.now() >= z.nextShrink
-  ) {
-    beginZoneShrink();
-  }
-
-  if (z.shrinking) {
-    const difference =
-      z.startRadius -
-      z.targetRadius;
-
-    const speedProgress =
-      difference > 0
-        ? (CONFIG.ZONE.shrinkSpeed * dt) /
-          difference
-        : 1;
-
-    z.progress = Math.min(
-      1,
-      z.progress + speedProgress
-    );
-
+  if (z.isShrinking) {
+    const shrinkAmount = CONFIG.ZONE.shrinkSpeed * deltaTime;
+    z.progress = Math.min(1, z.progress + shrinkAmount / (z.startRadius - z.targetRadius + 0.001));
     const t = z.progress;
-
-    z.x =
-      z.startX +
-      (z.targetX - z.startX) * t;
-
-    z.z =
-      z.startZ +
-      (z.targetZ - z.startZ) * t;
-
-    z.radius =
-      z.startRadius +
-      (z.targetRadius - z.startRadius) * t;
-
-    if (z.progress >= 1) {
-      z.x = z.targetX;
-      z.z = z.targetZ;
-
-      z.radius =
-        z.targetRadius;
-
-      z.shrinking = false;
-
-      z.nextShrink =
-        Date.now() +
-        CONFIG.ZONE.waitBeforeShrink;
+    z.x = z.startX + (z.targetX - z.startX) * t;
+    z.z = z.startZ + (z.targetZ - z.startZ) * t;
+    z.radius = z.startRadius + (z.targetRadius - z.startRadius) * t;
+    if (z.radius <= z.targetRadius + 0.5) {
+      z.radius = z.targetRadius;
+      z.x = z.targetX; z.z = z.targetZ;
+      z.isShrinking = false;
+      z.progress = 1;
+      z.nextShrinkTime = Date.now() + CONFIG.ZONE.shrinkInterval;
     }
   }
-
-  applyZoneDamage(dt);
-}
-
-function applyZoneDamage(dt) {
-  for (const id in game.players) {
-    const p = game.players[id];
-
-    if (
-      p.role !== 'player' ||
-      p.state !== 'alive'
-    ) {
-      continue;
-    }
-
-    if (!insideZone(p.position)) {
-      p.health -=
-        CONFIG.ZONE.damagePerSecond *
-        dt;
-
-      if (p.health <= 0) {
-        killPlayer(
-          p.id,
-          'zone',
-          null
-        );
+  // Урон по игрокам и ботам вне зоны
+  const entities = { ...matchState.players, ...matchState.bots };
+  for (const id in entities) {
+    const e = entities[id];
+    if (e.state !== 'alive') continue;
+    if (!isInZone(e.position)) {
+      e.health -= CONFIG.ZONE.damagePerSecond * deltaTime;
+      if (e.health <= 0) {
+        e.health = 0;
+        e.state = 'dead';
+        e.currentInput = { forward: false, backward: false, left: false, right: false };
+        broadcastDeath(id, 'zone', null);
+        // Удаляем мёртвого бота
+        if (matchState.bots[id]) {
+          setTimeout(() => {
+            if (matchState.bots[id]) delete matchState.bots[id];
+          }, 5000);
+        }
+        checkMatchEnd();
       }
     }
   }
 }
 
-
-/* =========================================================
-   MOVEMENT
-========================================================= */
-
-function applyMovement(player, dt) {
-  if (
-    player.state !== 'alive' ||
-    player.role !== 'player'
-  ) {
-    return;
-  }
-
-  const input = player.input;
-
-  const yaw =
-    player.rotation.yaw || 0;
-
-  const forwardX = -Math.sin(yaw);
-  const forwardZ = -Math.cos(yaw);
-
-  const rightX = Math.cos(yaw);
-  const rightZ = -Math.sin(yaw);
-
-  let x = 0;
-  let z = 0;
-
-  if (input.forward) {
-    x += forwardX;
-    z += forwardZ;
-  }
-
-  if (input.backward) {
-    x -= forwardX;
-    z -= forwardZ;
-  }
-
-  if (input.left) {
-    x -= rightX;
-    z -= rightZ;
-  }
-
-  if (input.right) {
-    x += rightX;
-    z += rightZ;
-  }
-
-  const len = Math.hypot(x, z);
-
-  if (len < 0.001) {
-    return;
-  }
-
-  x /= len;
-  z /= len;
-
-  const speed =
-    input.sprint
-      ? CONFIG.SPRINT_SPEED
-      : CONFIG.MOVE_SPEED;
-
-  const move =
-    speed * dt;
-
-  player.position.x += x * move;
-  player.position.z += z * move;
-
-  const half =
-    CONFIG.WORLD_SIZE / 2 -
-    CONFIG.PLAYER_RADIUS;
-
-  player.position.x =
-    clamp(
-      player.position.x,
-      -half,
-      half
-    );
-
-  player.position.z =
-    clamp(
-      player.position.z,
-      -half,
-      half
-    );
-}
-
-
-/* =========================================================
-   ROTATION
-========================================================= */
-
-function rotatePlayer(
-  player,
-  yaw,
-  pitch
-) {
-  if (
-    !Number.isFinite(yaw) ||
-    !Number.isFinite(pitch)
-  ) {
-    return;
-  }
-
+// ===================== ВЫСТРЕЛ (игрока) =====================
+function performShot(playerId) {
+  const shooter = matchState.players[playerId];
+  if (!shooter || shooter.state !== 'alive') return false;
+  if (matchState.status === 'ending') return false;
   const now = Date.now();
+  const weaponKey = shooter.weapon || 'pistol';
+  const weapon = CONFIG.WEAPONS[weaponKey];
+  if (!weapon) return false;
+  if (now - shooter.lastShotTime < weapon.fireRate) return false;
+  shooter.lastShotTime = now;
+  if (shooter.ammo <= 0) return false;
+  shooter.ammo--;
 
-  if (
-    now - player.lastRotate <
-    1000 / CONFIG.ROTATE_RATE_LIMIT
-  ) {
-    return;
-  }
-
-  player.lastRotate = now;
-
-  yaw =
-    ((yaw % (Math.PI * 2)) +
-      Math.PI * 2) %
-    (Math.PI * 2);
-
-  pitch = clamp(
-    pitch,
-    -Math.PI / 2 + 0.01,
-    Math.PI / 2 - 0.01
-  );
-
-  player.rotation.yaw = yaw;
-  player.rotation.pitch = pitch;
-}
-
-
-/* =========================================================
-   RELOAD
-========================================================= */
-
-function startReload(player) {
-  if (
-    player.state !== 'alive' ||
-    player.reloading
-  ) {
-    return;
-  }
-
-  const weapon =
-    CONFIG.WEAPONS[player.weapon];
-
-  if (!weapon) {
-    return;
-  }
-
-  if (
-    player.ammo >= weapon.magazine
-  ) {
-    return;
-  }
-
-  if (
-    player.reserveAmmo <= 0
-  ) {
-    return;
-  }
-
-  player.reloading = true;
-
-  player.reloadEnd =
-    Date.now() + weapon.reload;
-}
-
-function updateReload(player) {
-  if (!player.reloading) {
-    return;
-  }
-
-  if (
-    Date.now() <
-    player.reloadEnd
-  ) {
-    return;
-  }
-
-  const weapon =
-    CONFIG.WEAPONS[player.weapon];
-
-  if (!weapon) {
-    player.reloading = false;
-    return;
-  }
-
-  const needed =
-    weapon.magazine -
-    player.ammo;
-
-  const amount =
-    Math.min(
-      needed,
-      player.reserveAmmo
-    );
-
-  player.ammo += amount;
-  player.reserveAmmo -= amount;
-
-  player.reloading = false;
-  player.reloadEnd = 0;
-}
-
-
-/* =========================================================
-   RAYCAST
-========================================================= */
-
-function getShotDirection(
-  player,
-  weapon
-) {
-  const yaw =
-    player.rotation.yaw;
-
-  const pitch =
-    player.rotation.pitch;
-
-  const spread =
-    weapon.spread || 0;
-
-  const finalYaw =
-    yaw +
-    randomRange(-spread, spread);
-
-  const finalPitch =
-    pitch +
-    randomRange(-spread, spread);
-
-  return {
-    x:
-      -Math.sin(finalYaw) *
-      Math.cos(finalPitch),
-
-    y:
-      Math.sin(finalPitch),
-
-    z:
-      -Math.cos(finalYaw) *
-      Math.cos(finalPitch)
+  const yaw = shooter.rotation.yaw || 0;
+  const pitch = shooter.rotation.pitch || 0;
+  const spread = weapon.spread || 0;
+  const spreadYaw = (Math.random() - 0.5) * spread * 2;
+  const spreadPitch = (Math.random() - 0.5) * spread * 2;
+  const finalYaw = yaw + spreadYaw;
+  const finalPitch = pitch + spreadPitch;
+  const dir = {
+    x: -Math.sin(finalYaw) * Math.cos(finalPitch),
+    y: Math.sin(finalPitch),
+    z: -Math.cos(finalYaw) * Math.cos(finalPitch),
   };
-}
+  const len = Math.sqrt(dir.x*dir.x + dir.y*dir.y + dir.z*dir.z);
+  if (len > 0) { dir.x /= len; dir.y /= len; dir.z /= len; }
+  const startPos = { x: shooter.position.x, y: CONFIG.PLAYER_EYE_HEIGHT, z: shooter.position.z };
 
-function raySphere(
-  origin,
-  direction,
-  center,
-  radius,
-  maxDistance
-) {
-  const ox =
-    origin.x - center.x;
+  let hitTargetId = null;
+  let hitProj = Infinity;
+  let headshot = false;
 
-  const oy =
-    origin.y - center.y;
-
-  const oz =
-    origin.z - center.z;
-
-  const b =
-    ox * direction.x +
-    oy * direction.y +
-    oz * direction.z;
-
-  const c =
-    ox * ox +
-    oy * oy +
-    oz * oz -
-    radius * radius;
-
-  const discriminant =
-    b * b - c;
-
-  if (discriminant < 0) {
-    return null;
-  }
-
-  const sqrt =
-    Math.sqrt(discriminant);
-
-  let t =
-    -b - sqrt;
-
-  if (t < 0) {
-    t = -b + sqrt;
-  }
-
-  if (
-    t < 0 ||
-    t > maxDistance
-  ) {
-    return null;
-  }
-
-  return t;
-}
-
-
-/* =========================================================
-   SHOOT
-========================================================= */
-
-function shoot(player) {
-  if (
-    game.status !== 'playing' ||
-    player.state !== 'alive' ||
-    player.role !== 'player'
-  ) {
-    return;
-  }
-
-  updateReload(player);
-
-  if (player.reloading) {
-    return;
-  }
-
-  const weapon =
-    CONFIG.WEAPONS[player.weapon];
-
-  if (!weapon) {
-    return;
-  }
-
-  const now = Date.now();
-
-  if (
-    now - player.lastShot <
-    weapon.fireRate
-  ) {
-    return;
-  }
-
-  if (player.ammo <= 0) {
-    startReload(player);
-    return;
-  }
-
-  player.lastShot = now;
-
-  player.ammo--;
-
-  player.stats.shots++;
-
-  const origin = {
-    x: player.position.x,
-    y: CONFIG.PLAYER_EYE_HEIGHT,
-    z: player.position.z
-  };
-
-  const pellets =
-    weapon.pellets || 1;
-
-  let bestTarget = null;
-  let bestDistance = Infinity;
-  let bestHeadshot = false;
-
-  for (let pellet = 0; pellet < pellets; pellet++) {
-    const direction =
-      getShotDirection(
-        player,
-        weapon
-      );
-
-    for (const id in game.players) {
-      if (id === player.id) {
-        continue;
+  // Проверяем игроков и ботов
+  const targets = { ...matchState.players, ...matchState.bots };
+  for (const id in targets) {
+    if (id === playerId) continue;
+    const target = targets[id];
+    if (target.state !== 'alive') continue;
+    const tPos = { x: target.position.x, y: CONFIG.PLAYER_HEIGHT/2, z: target.position.z };
+    const dist3D = distance3D(startPos, tPos);
+    if (dist3D > weapon.range) continue;
+    // Проверка тела
+    const to = { x: tPos.x - startPos.x, y: tPos.y - startPos.y, z: tPos.z - startPos.z };
+    const proj = to.x*dir.x + to.y*dir.y + to.z*dir.z;
+    if (proj > 0 && proj <= weapon.range) {
+      const close = { x: startPos.x + dir.x * proj, y: startPos.y + dir.y * proj, z: startPos.z + dir.z * proj };
+      const d = distance3D(close, tPos);
+      if (d < 0.6 && proj < hitProj) {
+        hitProj = proj;
+        hitTargetId = id;
+        headshot = false;
       }
-
-      const target =
-        game.players[id];
-
-      if (
-        target.role !== 'player' ||
-        target.state !== 'alive'
-      ) {
-        continue;
-      }
-
-      const body = {
-        x: target.position.x,
-        y: CONFIG.PLAYER_HEIGHT * 0.5,
-        z: target.position.z
-      };
-
-      const head = {
-        x: target.position.x,
-        y: CONFIG.PLAYER_HEIGHT - 0.2,
-        z: target.position.z
-      };
-
-      const bodyHit =
-        raySphere(
-          origin,
-          direction,
-          body,
-          0.65,
-          weapon.range
-        );
-
-      const headHit =
-        raySphere(
-          origin,
-          direction,
-          head,
-          0.32,
-          weapon.range
-        );
-
-      if (
-        headHit !== null &&
-        headHit < bestDistance
-      ) {
-        bestDistance = headHit;
-        bestTarget = target;
-        bestHeadshot = true;
-      }
-
-      if (
-        bodyHit !== null &&
-        bodyHit < bestDistance
-      ) {
-        bestDistance = bodyHit;
-        bestTarget = target;
-        bestHeadshot = false;
-      }
-    }
-
-    if (bestTarget) {
-      let damage =
-        weapon.damage;
-
-      if (bestHeadshot) {
-        damage *=
-          weapon.headshot;
-      }
-
-      damage =
-        Math.round(damage);
-
-      bestTarget.health =
-        clamp(
-          bestTarget.health -
-            damage,
-          0,
-          CONFIG.MAX_HEALTH
-        );
-
-      player.stats.damage +=
-        damage;
-
-      player.stats.hits++;
-
-      broadcast({
-        type: 'hit',
-        shooterId: player.id,
-        targetId: bestTarget.id,
-        damage,
-        headshot: bestHeadshot,
-        weapon: player.weapon
-      });
-
-      if (
-        bestTarget.health <= 0
-      ) {
-        killPlayer(
-          bestTarget.id,
-          'bullet',
-          player.id
-        );
-      }
-
-      if (pellets === 1) {
-        break;
+      // Голова
+      const headPos = { x: target.position.x, y: CONFIG.PLAYER_HEIGHT - 0.1, z: target.position.z };
+      const toHead = { x: headPos.x - startPos.x, y: headPos.y - startPos.y, z: headPos.z - startPos.z };
+      const projHead = toHead.x*dir.x + toHead.y*dir.y + toHead.z*dir.z;
+      if (projHead > 0 && projHead <= weapon.range) {
+        const closeHead = { x: startPos.x + dir.x * projHead, y: startPos.y + dir.y * projHead, z: startPos.z + dir.z * projHead };
+        const dHead = distance3D(closeHead, headPos);
+        if (dHead < 0.3 && projHead < hitProj) {
+          hitProj = projHead;
+          hitTargetId = id;
+          headshot = true;
+        }
       }
     }
   }
-}
 
-
-/* =========================================================
-   KILL
-========================================================= */
-
-function killPlayer(
-  playerId,
-  cause,
-  killerId
-) {
-  const player =
-    game.players[playerId];
-
-  if (
-    !player ||
-    player.state !== 'alive'
-  ) {
-    return;
-  }
-
-  player.health = 0;
-
-  player.state = 'dead';
-
-  player.input = {
-    forward: false,
-    backward: false,
-    left: false,
-    right: false,
-    sprint: false
-  };
-
-  if (killerId) {
-    const killer =
-      game.players[killerId];
-
-    if (killer) {
-      killer.kills++;
+  if (hitTargetId) {
+    const target = targets[hitTargetId];
+    if (!target || target.state !== 'alive') return false;
+    let damage = weapon.damage;
+    if (headshot) damage *= (weapon.headshotMultiplier || 2);
+    damage = Math.round(damage);
+    target.health = clamp(target.health - damage, 0, 100);
+    if (target.health <= 0) {
+      target.health = 0;
+      target.state = 'dead';
+      target.currentInput = { forward: false, backward: false, left: false, right: false };
+      shooter.kills = (shooter.kills || 0) + 1;
+      broadcastDeath(hitTargetId, 'bullet', playerId);
+      if (matchState.bots[hitTargetId]) {
+        setTimeout(() => {
+          if (matchState.bots[hitTargetId]) delete matchState.bots[hitTargetId];
+        }, 5000);
+      }
     }
+    broadcastHit(playerId, hitTargetId, damage, headshot, weaponKey);
+    if (target.state === 'dead') checkMatchEnd();
+    return true;
   }
-
-  broadcast({
-    type: 'death',
-    playerId,
-    killerId: killerId || null,
-    cause
-  });
-
-  checkMatchEnd();
+  return false;
 }
 
-
-/* =========================================================
-   LOOT
-========================================================= */
-
+// ===================== ОСТАЛЬНОЕ (loot, pickup, rotate, etc.) =====================
 function generateLoot() {
   const items = [];
-
-  const weapons =
-    Object.keys(CONFIG.WEAPONS);
-
+  const weaponKeys = Object.keys(CONFIG.WEAPONS);
   let attempts = 0;
-
-  while (
-    items.length <
-      CONFIG.LOOT_COUNT &&
-    attempts < 3000
-  ) {
+  while (items.length < CONFIG.LOOT_SPAWN_COUNT && attempts < 1000) {
     attempts++;
-
-    const pos =
-      randomPosition();
-
-    if (!insideZone(pos)) {
-      continue;
-    }
-
+    const pos = randomPosition();
+    if (!isInZone(pos)) continue;
     let tooClose = false;
-
-    for (const item of items) {
-      if (
-        distance2D(
-          pos,
-          item.position
-        ) < CONFIG.LOOT_DISTANCE
-      ) {
-        tooClose = true;
-        break;
-      }
+    for (const existing of items) {
+      if (distance2D(pos, existing.position) < CONFIG.MIN_LOOT_DISTANCE) { tooClose = true; break; }
     }
-
-    if (tooClose) {
-      continue;
-    }
-
-    const weapon =
-      weapons[
-        Math.floor(
-          Math.random() *
-          weapons.length
-        )
-      ];
-
+    if (tooClose) continue;
+    const key = weaponKeys[Math.floor(Math.random() * weaponKeys.length)];
+    const ammo = Math.floor(Math.random() * 30) + 20;
     items.push({
       id: uuidv4(),
-
       position: pos,
-
-      weapon,
-
-      ammo:
-        CONFIG.WEAPONS[weapon].magazine,
-
-      reserve:
-        CONFIG.WEAPONS[weapon].reserve,
-
-      picked: false
+      weapon: key,
+      ammo: ammo,
+      picked: false,
     });
   }
-
   return items;
 }
 
-function pickupLoot(
-  player,
-  lootId
-) {
-  if (
-    player.state !== 'alive'
-  ) {
-    return;
-  }
-
-  const item =
-    game.loot.find(
-      x =>
-        x.id === lootId &&
-        !x.picked
-    );
-
-  if (!item) {
-    return;
-  }
-
-  if (
-    distance2D(
-      player.position,
-      item.position
-    ) > 4
-  ) {
-    return;
-  }
-
+function handlePickup(playerId, lootId) {
+  const player = matchState.players[playerId];
+  if (!player || player.state !== 'alive') return;
+  const item = matchState.loot.find(l => l.id === lootId && !l.picked);
+  if (!item) return;
+  if (distance2D(player.position, item.position) > 3) return;
   item.picked = true;
-
-  player.weapon =
-    item.weapon;
-
-  const weapon =
-    CONFIG.WEAPONS[
-      item.weapon
-    ];
-
-  player.ammo =
-    Math.min(
-      item.ammo,
-      weapon.magazine
-    );
-
-  player.reserveAmmo =
-    item.reserve;
-
-  player.reloading = false;
-
-  broadcast({
-    type: 'loot-pickup',
-    lootId: item.id,
-    playerId: player.id
-  });
+  player.weapon = item.weapon;
+  player.ammo = clamp(item.ammo || 30, 0, CONFIG.MAX_AMMO);
+  player.lastShotTime = 0;
+  broadcastLootPickup(lootId, playerId);
 }
 
+function handleRotate(playerId, yaw, pitch) {
+  const player = matchState.players[playerId];
+  if (!player || player.state !== 'alive') return;
+  if (!Number.isFinite(yaw) || !Number.isFinite(pitch)) return;
+  const now = Date.now();
+  if (now - player.lastRotateTime < 1000 / CONFIG.ROTATE_RATE_LIMIT) return;
+  player.lastRotateTime = now;
+  const normalizedYaw = ((yaw % (2*Math.PI)) + 2*Math.PI) % (2*Math.PI);
+  const clampedPitch = clamp(pitch, -Math.PI/2 + 0.01, Math.PI/2 - 0.01);
+  player.rotation.yaw = normalizedYaw;
+  player.rotation.pitch = clampedPitch;
+}
 
-/* =========================================================
-   MATCH
-========================================================= */
+function handleShopBuy(playerId, itemId) {
+  const player = matchState.players[playerId];
+  if (!player || player.state !== 'alive') return;
+  const shopItem = matchState.shopItems.find(i => i.id === itemId);
+  if (!shopItem) return;
+  const currency = player.currency || 0;
+  if (currency < shopItem.price) return;
+  player.currency = currency - shopItem.price;
 
-function startMatch() {
-  if (
-    game.status !== 'waiting'
-  ) {
-    return;
+  if (shopItem.type === 'weapon') {
+    // Замена оружия
+    player.weapon = shopItem.id;
+    player.ammo = 30;
+    player.lastShotTime = 0;
+  } else if (shopItem.type === 'armor') {
+    player.armor = clamp((player.armor || 0) + 30, 0, 100);
+  } else if (shopItem.type === 'heal') {
+    player.health = clamp(player.health + 30, 0, 100);
   }
+  broadcastShopUpdate(playerId);
+}
 
-  const players =
-    Object.values(
-      game.players
-    ).filter(
-      p => p.role === 'player'
-    );
-
-  if (
-    players.length <
-    CONFIG.MIN_PLAYERS_TO_START
-  ) {
-    return;
+// ===================== РАССЫЛКИ =====================
+function safeSend(ws, data) {
+  if (ws.readyState === WebSocket.OPEN) {
+    try { ws.send(data); } catch (e) {}
   }
+}
 
-  game.status = 'playing';
+function broadcastState() {
+  const players = Object.values(matchState.players).filter(p => p.role === 'player');
+  const bots = Object.values(matchState.bots).filter(b => b.state === 'alive');
+  const state = {
+    type: 'state',
+    players: players.map(p => ({
+      id: p.id,
+      position: p.position,
+      rotation: p.rotation,
+      health: p.health,
+      alive: p.state === 'alive',
+      kills: p.kills || 0,
+      weapon: p.weapon,
+      ammo: p.ammo,
+      currency: p.currency || 0,
+      armor: p.armor || 0,
+    })),
+    bots: bots.map(b => ({
+      id: b.id,
+      position: b.position,
+      rotation: b.rotation,
+      health: b.health,
+      alive: b.state === 'alive',
+      weapon: b.weapon,
+    })),
+    zone: {
+      x: matchState.zone.x,
+      z: matchState.zone.z,
+      radius: matchState.zone.radius,
+      targetRadius: matchState.zone.targetRadius,
+      isShrinking: matchState.zone.isShrinking,
+      phase: matchState.zone.phase,
+      nextShrinkTime: matchState.zone.nextShrinkTime,
+      progress: matchState.zone.progress,
+      startRadius: matchState.zone.startRadius,
+      startX: matchState.zone.startX,
+      startZ: matchState.zone.startZ,
+    },
+    loot: matchState.loot.filter(l => !l.picked).map(l => ({ id: l.id, position: l.position, weapon: l.weapon })),
+    shop: matchState.shopItems,
+    matchActive: matchState.status === 'playing',
+    matchEnding: matchState.status === 'ending',
+    status: matchState.status,
+    winner: matchState.winner,
+  };
+  const msg = JSON.stringify(state);
+  wss.clients.forEach(c => { if (c.readyState === WebSocket.OPEN) safeSend(c, msg); });
+}
 
-  game.matchId = uuidv4();
+function broadcastDeath(playerId, cause, killerId) {
+  const msg = JSON.stringify({ type: 'death', playerId, cause, killerId: killerId || null });
+  wss.clients.forEach(c => { if (c.readyState === WebSocket.OPEN) safeSend(c, msg); });
+}
 
-  game.startedAt =
-    Date.now();
+function broadcastHit(shooterId, targetId, damage, headshot, weapon) {
+  const msg = JSON.stringify({ type: 'hit', shooterId, targetId, damage, headshot, weapon });
+  wss.clients.forEach(c => { if (c.readyState === WebSocket.OPEN) safeSend(c, msg); });
+}
 
-  game.winner = null;
+function broadcastLootPickup(lootId, playerId) {
+  const msg = JSON.stringify({ type: 'loot-pickup', lootId, playerId });
+  wss.clients.forEach(c => { if (c.readyState === WebSocket.OPEN) safeSend(c, msg); });
+}
 
-  initZone();
+function broadcastShopUpdate(playerId) {
+  const msg = JSON.stringify({ type: 'shop-update', playerId });
+  wss.clients.forEach(c => { if (c.readyState === WebSocket.OPEN) safeSend(c, msg); });
+}
 
-  game.loot =
-    generateLoot();
-
-  const positions =
-    generateSpawns(players);
-
-  players.forEach(
-    (player, index) => {
-      const weapon =
-        CONFIG.WEAPONS.pistol;
-
-      player.position =
-        positions[index];
-
-      player.rotation = {
-        yaw: 0,
-        pitch: 0
-      };
-
-      player.health = 100;
-
-      player.state = 'alive';
-
-      player.kills = 0;
-
-      player.weapon =
-        'pistol';
-
-      player.ammo =
-        weapon.magazine;
-
-      player.reserveAmmo =
-        weapon.reserve;
-
-      player.reloading = false;
-
-      player.lastShot = 0;
-
-      player.input = {
-        forward: false,
-        backward: false,
-        left: false,
-        right: false,
-        sprint: false
-      };
-
-      player.stats = {
-        damage: 0,
-        shots: 0,
-        hits: 0
-      };
+function broadcastWinner(playerId) {
+  if (matchState.status === 'ending') return;
+  matchState.status = 'ending';
+  matchState.winner = playerId;
+  const msg = JSON.stringify({ type: 'winner', playerId, nextMatchIn: 5000 });
+  wss.clients.forEach(c => { if (c.readyState === WebSocket.OPEN) safeSend(c, msg); });
+  if (matchState.endTimer) clearTimeout(matchState.endTimer);
+  matchState.endTimer = setTimeout(() => {
+    matchState.status = 'waiting';
+    matchState.winner = null;
+    matchState.endTimer = null;
+    // Сброс ботов и игроков для нового матча
+    for (const id in matchState.players) {
+      const p = matchState.players[id];
+      p.role = 'player';
+      p.state = 'waiting';
     }
-  );
+    // Спавним новых ботов
+    matchState.bots = spawnBots(CONFIG.MAX_BOTS);
+    const participants = Object.values(matchState.players).filter(p => p.role === 'player');
+    if (participants.length >= CONFIG.MIN_PLAYERS_TO_START) {
+      startMatch();
+    } else {
+      broadcastState();
+    }
+  }, 5000);
+}
 
-  console.log(
-    `🎮 MATCH START ${game.matchId} | players=${players.length}`
-  );
+function broadcastDraw() {
+  if (matchState.status === 'ending') return;
+  matchState.status = 'draw';
+  const msg = JSON.stringify({ type: 'draw', nextMatchIn: 3000 });
+  wss.clients.forEach(c => { if (c.readyState === WebSocket.OPEN) safeSend(c, msg); });
+  if (matchState.endTimer) clearTimeout(matchState.endTimer);
+  matchState.endTimer = setTimeout(() => {
+    matchState.status = 'waiting';
+    matchState.winner = null;
+    matchState.endTimer = null;
+    for (const id in matchState.players) {
+      const p = matchState.players[id];
+      p.role = 'player';
+      p.state = 'waiting';
+    }
+    matchState.bots = spawnBots(CONFIG.MAX_BOTS);
+    const participants = Object.values(matchState.players).filter(p => p.role === 'player');
+    if (participants.length >= CONFIG.MIN_PLAYERS_TO_START) {
+      startMatch();
+    } else {
+      broadcastState();
+    }
+  }, 3000);
+}
 
-  broadcast({
-    type: 'match-start',
-    matchId: game.matchId
+// ===================== УПРАВЛЕНИЕ МАТЧЕМ =====================
+function startMatch() {
+  if (matchState.status === 'playing') return;
+  if (matchState.status === 'ending') return;
+  const players = Object.values(matchState.players).filter(p => p.role === 'player');
+  if (players.length < CONFIG.MIN_PLAYERS_TO_START) return;
+  if (matchState.endTimer) clearTimeout(matchState.endTimer);
+  matchState.status = 'playing';
+  matchState.id = uuidv4();
+  matchState.startTime = Date.now();
+  matchState.winner = null;
+  initZone();
+  matchState.loot = generateLoot();
+  // Спавним ботов
+  matchState.bots = spawnBots(CONFIG.MAX_BOTS);
+  // Позиции для игроков
+  const playerIds = players.map(p => p.id);
+  const spawnPositions = generateSpawnPositions(playerIds.length);
+  playerIds.forEach((id, i) => {
+    const p = matchState.players[id];
+    p.position = spawnPositions[i] || { x: 0, z: 0 };
+    p.health = 100;
+    p.state = 'alive';
+    p.kills = 0;
+    p.weapon = 'pistol';
+    p.ammo = 30;
+    p.rotation = { yaw: 0, pitch: 0 };
+    p.lastShotTime = 0;
+    p.lastRotateTime = 0;
+    p.currentInput = { forward: false, backward: false, left: false, right: false };
+    p.currency = 100; // начальные деньги
+    p.armor = 0;
   });
-
+  console.log(`🎮 Матч ${matchState.id} начат! Игроков: ${playerIds.length}, ботов: ${Object.keys(matchState.bots).length}`);
   broadcastState();
 }
 
 function checkMatchEnd() {
-  if (
-    game.status !== 'playing'
-  ) {
+  if (matchState.status !== 'playing') return;
+  const alivePlayers = Object.values(matchState.players).filter(p => p.role === 'player' && p.state === 'alive');
+  const aliveBots = Object.values(matchState.bots).filter(b => b.state === 'alive');
+  const totalAlive = alivePlayers.length + aliveBots.length;
+  if (totalAlive === 0) {
+    broadcastDraw();
     return;
   }
-
-  const alive =
-    Object.values(
-      game.players
-    ).filter(
-      p =>
-        p.role === 'player' &&
-        p.state === 'alive'
-    );
-
-  if (alive.length === 0) {
-    finishMatch(null);
+  if (alivePlayers.length === 0 && aliveBots.length > 0) {
+    // Победили боты? Не объявляем победителя, а завершаем матч ничьей
+    broadcastDraw();
     return;
   }
-
-  if (alive.length === 1) {
-    finishMatch(alive[0].id);
+  if (alivePlayers.length === 1 && aliveBots.length === 0) {
+    broadcastWinner(alivePlayers[0].id);
   }
 }
 
-function finishMatch(winnerId) {
-  if (
-    game.status !== 'playing'
-  ) {
+// ===================== ВЕБСОКЕТ =====================
+wss.on('connection', (ws) => {
+  const total = Object.keys(matchState.players).length;
+  if (total >= CONFIG.MAX_PLAYERS) {
+    ws.send(JSON.stringify({ type: 'error', message: 'Сервер заполнен' }));
+    ws.close();
     return;
   }
+  const isSpectator = matchState.status === 'playing' || matchState.status === 'ending' || matchState.status === 'draw';
+  const id = uuidv4();
+  const player = {
+    id,
+    ws,
+    role: isSpectator ? 'spectator' : 'player',
+    state: isSpectator ? 'spectator' : 'waiting',
+    position: { x: 0, z: 0 },
+    rotation: { yaw: 0, pitch: 0 },
+    health: 100,
+    kills: 0,
+    weapon: 'pistol',
+    ammo: 30,
+    lastShotTime: 0,
+    lastRotateTime: 0,
+    lastPingTime: 0,
+    currentInput: { forward: false, backward: false, left: false, right: false },
+    currency: isSpectator ? 0 : 100,
+    armor: 0,
+    _messageCount: 0,
+    _lastMessageReset: 0,
+  };
+  matchState.players[id] = player;
 
-  game.status = 'ending';
+  ws.send(JSON.stringify({
+    type: 'init',
+    id,
+    worldSize: CONFIG.WORLD_SIZE,
+    config: {
+      moveSpeed: CONFIG.MOVE_SPEED,
+      weapons: CONFIG.WEAPONS,
+      playerHeight: CONFIG.PLAYER_HEIGHT,
+      eyeHeight: CONFIG.PLAYER_EYE_HEIGHT,
+    },
+    isSpectator: player.role === 'spectator',
+    status: matchState.status,
+  }));
 
-  game.winner =
-    winnerId || null;
-
-  broadcast({
-    type: winnerId
-      ? 'winner'
-      : 'draw',
-
-    playerId:
-      winnerId || null,
-
-    nextMatchIn:
-      CONFIG.MATCH_END_DELAY
-  });
-
-  if (game.endTimer) {
-    clearTimeout(
-      game.endTimer
-    );
-  }
-
-  game.endTimer =
-    setTimeout(
-      resetMatch,
-      CONFIG.MATCH_END_DELAY
-    );
-}
-
-function resetMatch() {
-  game.status = 'waiting';
-
-  game.matchId = null;
-
-  game.winner = null;
-
-  game.loot = [];
-
-  for (const id in game.players) {
-    const p =
-      game.players[id];
-
-    if (
-      p.role === 'spectator'
-    ) {
-      p.role = 'player';
+  if (matchState.status === 'waiting') {
+    const participants = Object.values(matchState.players).filter(p => p.role === 'player');
+    if (participants.length >= CONFIG.MIN_PLAYERS_TO_START) {
+      startMatch();
     }
-
-    p.state = 'waiting';
   }
-
-  game.endTimer = null;
-
   broadcastState();
 
-  startMatch();
-}
+  ws.isAlive = true;
+  ws.on('pong', () => { ws.isAlive = true; });
 
-
-/* =========================================================
-   BROADCAST
-========================================================= */
-
-function buildState() {
-  return {
-    type: 'state',
-
-    status: game.status,
-
-    matchId: game.matchId,
-
-    players:
-      Object.values(
-        game.players
-      ).map(p => ({
-        id: p.id,
-
-        role: p.role,
-
-        position: p.position,
-
-        rotation: p.rotation,
-
-        health: p.health,
-
-        alive:
-          p.state === 'alive',
-
-        kills: p.kills,
-
-        weapon: p.weapon,
-
-        ammo: p.ammo,
-
-        reserveAmmo:
-          p.reserveAmmo,
-
-        reloading:
-          p.reloading
-      })),
-
-    zone: {
-      x: game.zone.x,
-
-      z: game.zone.z,
-
-      radius:
-        game.zone.radius,
-
-      targetRadius:
-        game.zone.targetRadius,
-
-      phase:
-        game.zone.phase,
-
-      shrinking:
-        game.zone.shrinking,
-
-      progress:
-        game.zone.progress,
-
-      nextShrink:
-        game.zone.nextShrink
-    },
-
-    loot:
-      game.loot
-        .filter(
-          item => !item.picked
-        )
-        .map(item => ({
-          id: item.id,
-
-          position:
-            item.position,
-
-          weapon:
-            item.weapon
-        })),
-
-    winner:
-      game.winner
-  };
-}
-
-function broadcast(data) {
-  const msg =
-    JSON.stringify(data);
-
-  wss.clients.forEach(
-    ws => {
-      safeSend(ws, msg);
-    }
-  );
-}
-
-function broadcastState() {
-  if (
-    Object.keys(
-      game.players
-    ).length === 0
-  ) {
-    return;
-  }
-
-  broadcast(
-    buildState()
-  );
-}
-
-
-/* =========================================================
-   CONNECTION LIMITS
-========================================================= */
-
-function countPlayers() {
-  return Object.values(
-    game.players
-  ).filter(
-    p => p.role === 'player'
-  ).length;
-}
-
-function countSpectators() {
-  return Object.values(
-    game.players
-  ).filter(
-    p => p.role === 'spectator'
-  ).length;
-}
-
-
-/* =========================================================
-   WEBSOCKET
-========================================================= */
-
-wss.on(
-  'connection',
-  ws => {
-    const players =
-      countPlayers();
-
-    const spectators =
-      countSpectators();
-
-    let role = 'player';
-
-    if (
-      game.status === 'playing' ||
-      game.status === 'ending'
-    ) {
-      role = 'spectator';
-    }
-
-    if (
-      role === 'player' &&
-      players >= CONFIG.MAX_PLAYERS
-    ) {
-      if (
-        spectators <
-        CONFIG.MAX_SPECTATORS
-      ) {
-        role = 'spectator';
-      } else {
-        sendJSON(ws, {
-          type: 'error',
-          message:
-            'Сервер переполнен'
-        });
-
-        ws.close();
-
-        return;
-      }
-    }
-
-    if (
-      role === 'spectator' &&
-      spectators >=
-        CONFIG.MAX_SPECTATORS
-    ) {
-      sendJSON(ws, {
-        type: 'error',
-        message:
-          'Лимит зрителей достигнут'
-      });
-
-      ws.close();
-
+  ws.on('message', (message) => {
+    if (message.length > CONFIG.MAX_MESSAGE_SIZE) {
+      safeSend(ws, JSON.stringify({ type: 'error', message: 'Message too large' }));
       return;
     }
+    try {
+      const data = JSON.parse(message);
+      if (!data || typeof data !== 'object') return;
+      const player = matchState.players[id];
+      if (!player) return;
+      const now = Date.now();
+      if (now - player._lastMessageReset > 1000) { player._messageCount = 0; player._lastMessageReset = now; }
+      player._messageCount = (player._messageCount || 0) + 1;
+      if (player._messageCount > CONFIG.MAX_MESSAGES_PER_SECOND) return;
+      player.lastSeen = now;
+      if (player.role === 'spectator') return;
+      if (player.state !== 'alive') return;
+      if (matchState.status === 'ending' || matchState.status === 'draw') return;
 
-    const player =
-      createPlayer(
-        ws,
-        role
-      );
-
-    game.players[
-      player.id
-    ] = player;
-
-    ws.isAlive = true;
-
-    ws.on(
-      'pong',
-      () => {
-        ws.isAlive = true;
-
-        player.lastSeen =
-          Date.now();
+      switch (data.type) {
+        case 'move-input': {
+          const input = data.input || {};
+          player.currentInput.forward = (input.forward === true || input.forward === 1);
+          player.currentInput.backward = (input.backward === true || input.backward === 1);
+          player.currentInput.left = (input.left === true || input.left === 1);
+          player.currentInput.right = (input.right === true || input.right === 1);
+          break;
+        }
+        case 'rotate': {
+          const yaw = parseFloat(data.yaw);
+          const pitch = parseFloat(data.pitch);
+          if (Number.isFinite(yaw) && Number.isFinite(pitch)) handleRotate(id, yaw, pitch);
+          break;
+        }
+        case 'shoot': {
+          performShot(id);
+          break;
+        }
+        case 'pickup': {
+          if (data.lootId && typeof data.lootId === 'string' && data.lootId.length < 100) {
+            handlePickup(id, data.lootId);
+          }
+          break;
+        }
+        case 'shop-buy': {
+          if (data.itemId && typeof data.itemId === 'string') {
+            handleShopBuy(id, data.itemId);
+          }
+          break;
+        }
+        case 'ping': {
+          if (now - player.lastPingTime < 1000 / CONFIG.PING_RATE_LIMIT) break;
+          player.lastPingTime = now;
+          safeSend(ws, JSON.stringify({ type: 'pong' }));
+          break;
+        }
+        default: break;
       }
-    );
+    } catch (err) {}
+  });
 
-    sendJSON(ws, {
-      type: 'init',
-
-      id: player.id,
-
-      role: player.role,
-
-      worldSize:
-        CONFIG.WORLD_SIZE,
-
-      config: {
-        moveSpeed:
-          CONFIG.MOVE_SPEED,
-
-        sprintSpeed:
-          CONFIG.SPRINT_SPEED,
-
-        playerHeight:
-          CONFIG.PLAYER_HEIGHT,
-
-        eyeHeight:
-          CONFIG.PLAYER_EYE_HEIGHT,
-
-        weapons:
-          CONFIG.WEAPONS
-      },
-
-      status:
-        game.status
-    });
-
-    console.log(
-      `✅ CONNECT ${player.id} | ${player.role}`
-    );
-
-    ws.on(
-      'message',
-      raw => {
-        if (
-          raw.length >
-          CONFIG.MAX_MESSAGE_SIZE
-        ) {
-          return;
-        }
-
-        let data;
-
-        try {
-          data =
-            JSON.parse(
-              raw.toString()
-            );
-        } catch {
-          return;
-        }
-
-        if (
-          !data ||
-          typeof data !== 'object'
-        ) {
-          return;
-        }
-
-        const now =
-          Date.now();
-
-        if (
-          now -
-            player.messageReset >
-          1000
-        ) {
-          player.messageReset =
-            now;
-
-          player.messageCount =
-            0;
-        }
-
-        player.messageCount++;
-
-        if (
-          player.messageCount >
-          CONFIG.MAX_MESSAGES_PER_SECOND
-        ) {
-          return;
-        }
-
-        player.lastSeen =
-          now;
-
-        if (
-          player.role ===
-          'spectator'
-        ) {
-          return;
-        }
-
-        if (
-          player.state ===
-          'dead'
-        ) {
-          return;
-        }
-
-        switch (
-          data.type
-        ) {
-          case 'move-input': {
-            const input =
-              data.input || {};
-
-            player.input = {
-              forward:
-                input.forward === true,
-
-              backward:
-                input.backward === true,
-
-              left:
-                input.left === true,
-
-              right:
-                input.right === true,
-
-              sprint:
-                input.sprint === true
-            };
-
-            break;
-          }
-
-          case 'rotate': {
-            rotatePlayer(
-              player,
-              Number(data.yaw),
-              Number(data.pitch)
-            );
-
-            break;
-          }
-
-          case 'shoot': {
-            shoot(player);
-
-            break;
-          }
-
-          case 'reload': {
-            startReload(player);
-
-            break;
-          }
-
-          case 'pickup': {
-            if (
-              typeof data.lootId ===
-                'string' &&
-              data.lootId.length <
-                100
-            ) {
-              pickupLoot(
-                player,
-                data.lootId
-              );
-            }
-
-            break;
-          }
-
-          case 'ping': {
-            if (
-              now -
-                player.lastPing <
-              1000 /
-                CONFIG.PING_RATE_LIMIT
-            ) {
-              return;
-            }
-
-            player.lastPing =
-              now;
-
-            sendJSON(ws, {
-              type: 'pong'
-            });
-
-            break;
-          }
-        }
-      }
-    );
-
-    ws.on(
-      'close',
-      () => {
-        delete game.players[
-          player.id
-        ];
-
-        console.log(
-          `❌ DISCONNECT ${player.id}`
-        );
-
-        if (
-          game.status ===
-          'playing'
-        ) {
-          checkMatchEnd();
-        }
-
-        if (
-          game.status ===
-          'waiting'
-        ) {
-          startMatch();
-        }
-
+  ws.on('close', () => {
+    if (!matchState.players[id]) return;
+    delete matchState.players[id];
+    if (matchState.status === 'playing') {
+      checkMatchEnd();
+      const participants = Object.values(matchState.players).filter(p => p.role === 'player');
+      if (participants.length < CONFIG.MIN_PLAYERS_TO_START) {
+        matchState.status = 'waiting';
         broadcastState();
       }
-    );
-
-    ws.on(
-      'error',
-      () => {
-        try {
-          ws.close();
-        } catch {}
-      }
-    );
-
+    } else if (matchState.status === 'waiting') {
+      const participants = Object.values(matchState.players).filter(p => p.role === 'player');
+      if (participants.length >= CONFIG.MIN_PLAYERS_TO_START) startMatch();
+    }
     broadcastState();
+  });
 
-    startMatch();
-  }
-);
+  ws.on('error', (err) => {
+    console.error('WebSocket error:', err.message);
+    ws.close();
+  });
+});
 
+// ===================== HEARTBEAT =====================
+setInterval(() => {
+  wss.clients.forEach(ws => {
+    if (ws.isAlive === false) ws.terminate();
+    ws.isAlive = false;
+    ws.ping();
+  });
+}, 30000);
 
-/* =========================================================
-   HEARTBEAT
-========================================================= */
-
-setInterval(
-  () => {
-    wss.clients.forEach(
-      ws => {
-        if (
-          ws.isAlive === false
-        ) {
-          try {
-            ws.terminate();
-          } catch {}
-
-          return;
-        }
-
-        ws.isAlive = false;
-
-        try {
-          ws.ping();
-        } catch {}
-      }
-    );
-  },
-  30000
-);
-
-
-/* =========================================================
-   GAME LOOP
-========================================================= */
-
-const FIXED_DT =
-  1 / CONFIG.TICK_RATE;
-
-let lastTime =
-  performance.now();
-
+// ===================== ИГРОВОЙ ЦИКЛ =====================
+const TICK_INTERVAL = 1000 / CONFIG.TICK_RATE;
+let lastTick = performance.now();
 let accumulator = 0;
 
 function gameLoop() {
-  const now =
-    performance.now();
-
-  let frame =
-    (now - lastTime) /
-    1000;
-
-  lastTime = now;
-
-  frame =
-    Math.min(frame, 0.1);
-
-  accumulator += frame;
-
-  while (
-    accumulator >=
-    FIXED_DT
-  ) {
-    if (
-      game.status ===
-      'playing'
-    ) {
-      updateZone(
-        FIXED_DT
-      );
-
-      for (
-        const id in game.players
-      ) {
-        const p =
-          game.players[id];
-
-        if (
-          p.role === 'player' &&
-          p.state === 'alive'
-        ) {
-          applyMovement(
-            p,
-            FIXED_DT
-          );
-
-          updateReload(p);
+  const now = performance.now();
+  let delta = (now - lastTick) / 1000;
+  lastTick = now;
+  if (delta > 0.1) delta = 0.1;
+  accumulator += delta;
+  while (accumulator >= TICK_INTERVAL / 1000) {
+    const dt = TICK_INTERVAL / 1000;
+    if (matchState.status === 'playing') {
+      updateZone(dt);
+      // Обновляем ботов
+      for (const id in matchState.bots) {
+        const bot = matchState.bots[id];
+        if (bot.state === 'alive') {
+          updateBotAI(bot, dt);
+          applyMovement(id, dt);
         }
       }
-
+      // Движение игроков
+      for (const id in matchState.players) {
+        const p = matchState.players[id];
+        if (p.role === 'player' && p.state === 'alive') {
+          applyMovement(id, dt);
+        }
+      }
       checkMatchEnd();
     }
-
-    accumulator -=
-      FIXED_DT;
+    accumulator -= TICK_INTERVAL / 1000;
   }
-
-  const nowMs =
-    Date.now();
-
-  if (
-    nowMs -
-      game.lastBroadcast >=
-    1000 /
-      CONFIG.BROADCAST_RATE
-  ) {
-    broadcastState();
-
-    game.lastBroadcast =
-      nowMs;
+  const nowMs = Date.now();
+  if (nowMs - matchState.lastBroadcastTime >= 1000 / CONFIG.BROADCAST_RATE) {
+    if (Object.keys(matchState.players).length > 0 || Object.keys(matchState.bots).length > 0) {
+      broadcastState();
+    }
+    matchState.lastBroadcastTime = nowMs;
   }
-
-  setImmediate(
-    gameLoop
-  );
+  setImmediate(gameLoop);
 }
 
 gameLoop();
 
-
-/* =========================================================
-   SERVER
-========================================================= */
-
-server.listen(
-  CONFIG.PORT,
-  '0.0.0.0',
-  () => {
-    console.log('');
-    console.log(
-      '================================'
-    );
-    console.log(
-      '🔥 BATTLE ROYALE SERVER ONLINE'
-    );
-    console.log(
-      '================================'
-    );
-    console.log(
-      `🌍 World: ${CONFIG.WORLD_SIZE}x${CONFIG.WORLD_SIZE}`
-    );
-    console.log(
-      `👥 Players: ${CONFIG.MAX_PLAYERS}`
-    );
-    console.log(
-      `👁 Spectators: ${CONFIG.MAX_SPECTATORS}`
-    );
-    console.log(
-      `⚙ Tick: ${CONFIG.TICK_RATE} Hz`
-    );
-    console.log(
-      `📡 Broadcast: ${CONFIG.BROADCAST_RATE} Hz`
-    );
-    console.log(
-      `🔫 Weapons: ${Object.keys(CONFIG.WEAPONS).join(', ')}`
-    );
-    console.log(
-      '================================'
-    );
-  }
-);
+// ===================== ЗАПУСК =====================
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 Сервер запущен на порту ${PORT}`);
+  console.log(`🌍 Макс. игроков: ${CONFIG.MAX_PLAYERS}, ботов: ${CONFIG.MAX_BOTS}`);
+  console.log(`🔫 Оружие: ${Object.keys(CONFIG.WEAPONS).join(', ')}`);
+});
