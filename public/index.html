@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Battle Royale</title>
+
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #111;
+      color: white;
+      font-family: Arial, sans-serif;
+      touch-action: none;
+    }
+
+    #game {
+      width: 100%;
+      height: 100%;
+      position: relative;
+      overflow: hidden;
+      background:
+        linear-gradient(
+          #77b7df 0 42%,
+          #527d3d 42% 100%
+        );
+    }
+
+    #top {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      right: 10px;
+      z-index: 10;
+      display: flex;
+      justify-content: space-between;
+      pointer-events: none;
+    }
+
+    .panel {
+      background: rgba(0,0,0,.55);
+      border: 1px solid rgba(255,255,255,.2);
+      border-radius: 12px;
+      padding: 8px 12px;
+      font-size: 14px;
+    }
+
+    #health {
+      color: #55ff66;
+      font-weight: bold;
+    }
+
+    #weapon {
+      color: #ffd84d;
+      font-weight: bold;
+    }
+
+    #zone {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 70vw;
+      height: 70vw;
+      max-width: 500px;
+      max-height: 500px;
+      transform: translate(-50%, -50%);
+      border: 3px solid rgba(80,180,255,.9);
+      border-radius: 50%;
+      box-shadow:
+        0 0 25px rgba(40,140,255,.5),
+        inset 0 0 25px rgba(40,140,255,.15);
+      pointer-events: none;
+    }
+
+    #player {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 34px;
+      height: 34px;
+      transform: translate(-50%, -50%);
+      border-radius: 50%;
+      background: #28a9ff;
+      border: 3px solid white;
+      box-shadow: 0 0 18px #28a9ff;
+      z-index: 5;
+    }
+
+    #crosshair {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 26px;
+      height: 26px;
+      transform: translate(-50%, -50%);
+      z-index: 20;
+      pointer-events: none;
+    }
+
+    #crosshair::before,
+    #crosshair::after {
+      content: "";
+      position: absolute;
+      background: white;
+      box-shadow: 0 0 4px black;
+    }
+
+    #crosshair::before {
+      width: 26px;
+      height: 2px;
+      left: 0;
+      top: 12px;
+    }
+
+    #crosshair::after {
+      width: 2px;
+      height: 26px;
+      left: 12px;
+      top: 0;
+    }
+
+    #controls {
+      position: absolute;
+      left: 15px;
+      bottom: 20px;
+      width: 150px;
+      height: 150px;
+      z-index: 30;
+    }
+
+    .move {
+      position: absolute;
+      width: 52px;
+      height: 52px;
+      border-radius: 50%;
+      border: 1px solid rgba(255,255,255,.3);
+      background: rgba(0,0,0,.5);
+      color: white;
+      font-size: 22px;
+    }
+
+    #up {
+      left: 49px;
+      top: 0;
+    }
+
+    #down {
+      left: 49px;
+      bottom: 0;
+    }
+
+    #left {
+      left: 0;
+      top: 49px;
+    }
+
+    #right {
+      right: 0;
+      top: 49px;
+    }
+
+    #actions {
+      position: absolute;
+      right: 15px;
+      bottom: 20px;
+      z-index: 30;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      align-items: flex-end;
+    }
+
+    .action {
+      width: 72px;
+      height: 72px;
+      border-radius: 50%;
+      border: 2px solid rgba(255,255,255,.5);
+      background: rgba(0,0,0,.55);
+      color: white;
+      font-weight: bold;
+      font-size: 12px;
+    }
+
+    #shoot {
+      background: rgba(210,30,30,.7);
+      border-color: #ff7777;
+      width: 82px;
+      height: 82px;
+    }
+
+    #message {
+      position: absolute;
+      left: 50%;
+      top: 25%;
+      transform: translateX(-50%);
+      z-index: 50;
+      background: rgba(0,0,0,.7);
+      border-radius: 12px;
+      padding: 12px 18px;
+      text-align: center;
+      display: none;
+    }
+
+    #status {
+      position: absolute;
+      left: 50%;
+      bottom: 10px;
+      transform: translateX(-50%);
+      z-index: 40;
+      background: rgba(0,0,0,.6);
+      border-radius: 10px;
+      padding: 7px 12px;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    #players {
+      color: #ddd;
+    }
+  </style>
+</head>
+
+<body>
+
+<div id="game">
+
+  <div id="top">
+    <div class="panel">
+      ❤️ <span id="health">100</span>
+      &nbsp; 👥 <span id="players">0</span>
+    </div>
+
+    <div class="panel">
+      🔫 <span id="weapon">Пистолет</span>
+      &nbsp; <span id="ammo">12 / 60</span>
+    </div>
+  </div>
+
+  <div id="zone"></div>
+
+  <div id="player"></div>
+
+  <div id="crosshair"></div>
+
+  <div id="message"></div>
+
+  <div id="controls">
+    <button class="move" id="up">▲</button>
+    <button class="move" id="down">▼</button>
+    <button class="move" id="left">◀</button>
+    <button class="move" id="right">▶</button>
+  </div>
+
+  <div id="actions">
+    <button class="action" id="reload">RELOAD</button>
+    <button class="action" id="shoot">FIRE</button>
+  </div>
+
+  <div id="status">
+    Подключение к серверу...
+  </div>
+
+</div>
+
+<script>
+const statusEl = document.getElementById('status');
+const healthEl = document.getElementById('health');
+const ammoEl = document.getElementById('ammo');
+const weaponEl = document.getElementById('weapon');
+const playersEl = document.getElementById('players');
+const messageEl = document.getElementById('message');
+
+let socket = null;
+let myId = null;
+let gameState = null;
+
+const input = {
+  forward: false,
+  backward: false,
+  left: false,
+  right: false,
+  sprint: false
+};
+
+function connect() {
+  const protocol =
+    location.protocol === 'https:'
+      ? 'wss:'
+      : 'ws:';
+
+  socket = new WebSocket(
+    protocol + '//' + location.host
+  );
+
+  socket.onopen = () => {
+    statusEl.textContent =
+      '🟢 Сервер подключён';
+  };
+
+  socket.onmessage = event => {
+    let data;
+
+    try {
+      data = JSON.parse(event.data);
+    } catch {
+      return;
+    }
+
+    handleMessage(data);
+  };
+
+  socket.onclose = () => {
+    statusEl.textContent =
+      '🔴 Соединение потеряно';
+
+    setTimeout(connect, 2000);
+  };
+
+  socket.onerror = () => {
+    statusEl.textContent =
+      '⚠️ Ошибка соединения';
+  };
+}
+
+function send(data) {
+  if (
+    socket &&
+    socket.readyState === WebSocket.OPEN
+  ) {
+    socket.send(JSON.stringify(data));
+  }
+}
+
+function handleMessage(data) {
+
+  if (data.type === 'init') {
+    myId = data.id;
+
+    statusEl.textContent =
+      data.status === 'playing'
+        ? '🎮 Матч идёт'
+        : '⏳ Ожидание игроков';
+
+    return;
+  }
+
+  if (data.type === 'state') {
+    gameState = data;
+
+    updateInterface();
+
+    return;
+  }
+
+  if (data.type === 'match-start') {
+    showMessage('🎮 МАТЧ НАЧАЛСЯ!');
+
+    setTimeout(hideMessage, 2000);
+
+    return;
+  }
+
+  if (data.type === 'winner') {
+    showMessage(
+      data.playerId === myId
+        ? '🏆 ТЫ ПОБЕДИЛ!'
+        : '🏆 ПОБЕДИТЕЛЬ ОПРЕДЕЛЁН'
+    );
+
+    return;
+  }
+
+  if (data.type === 'draw') {
+    showMessage('⚔️ НИЧЬЯ');
+
+    return;
+  }
+
+  if (data.type === 'death') {
+    if (data.playerId === myId) {
+      showMessage('💀 ТЫ УБИТ');
+    }
+
+    return;
+  }
+
+  if (data.type === 'hit') {
+    if (data.targetId === myId) {
+      statusEl.textContent =
+        '💥 В ТЕБЯ ПОПАЛИ!';
+    }
+
+    return;
+  }
+
+  if (data.type === 'error') {
+    showMessage(
+      '⚠️ ' + data.message
+    );
+  }
+}
+
+function updateInterface() {
+  if (!gameState) return;
+
+  const me =
+    gameState.players.find(
+      p => p.id === myId
+    );
+
+  playersEl.textContent =
+    gameState.players.filter(
+      p => p.alive
+    ).length;
+
+  if (!me) return;
+
+  healthEl.textContent =
+    Math.max(
+      0,
+      Math.round(me.health)
+    );
+
+  weaponEl.textContent =
+    me.weapon || 'Пистолет';
+
+  ammoEl.textContent =
+    `${me.ammo || 0} / ${me.reserveAmmo || 0}`;
+
+  if (!me.alive) {
+    statusEl.textContent =
+      '💀 Ты выбыл';
+  } else if (
+    gameState.status === 'playing'
+  ) {
+    statusEl.textContent =
+      '🟢 Игра идёт';
+  }
+}
+
+function showMessage(text) {
+  messageEl.textContent = text;
+  messageEl.style.display = 'block';
+}
+
+function hideMessage() {
+  messageEl.style.display = 'none';
+}
+
+function updateMovement() {
+  send({
+    type: 'move-input',
+    input
+  });
+}
+
+function bindButton(
+  id,
+  key
+) {
+  const button =
+    document.getElementById(id);
+
+  const start = event => {
+    event.preventDefault();
+
+    input[key] = true;
+
+    updateMovement();
+  };
+
+  const stop = event => {
+    event.preventDefault();
+
+    input[key] = false;
+
+    updateMovement();
+  };
+
+  button.addEventListener(
+    'touchstart',
+    start,
+    { passive: false }
+  );
+
+  button.addEventListener(
+    'touchend',
+    stop,
+    { passive: false }
+  );
+
+  button.addEventListener(
+    'mousedown',
+    start
+  );
+
+  button.addEventListener(
+    'mouseup',
+    stop
+  );
+
+  button.addEventListener(
+    'mouseleave',
+    stop
+  );
+}
+
+bindButton('up', 'forward');
+bindButton('down', 'backward');
+bindButton('left', 'left');
+bindButton('right', 'right');
+
+document
+  .getElementById('shoot')
+  .addEventListener(
+    'touchstart',
+    event => {
+      event.preventDefault();
+      send({ type: 'shoot' });
+    },
+    { passive: false }
+  );
+
+document
+  .getElementById('shoot')
+  .addEventListener(
+    'mousedown',
+    () => {
+      send({ type: 'shoot' });
+    }
+  );
+
+document
+  .getElementById('reload')
+  .addEventListener(
+    'click',
+    () => {
+      send({ type: 'reload' });
+    }
+  );
+
+connect();
+</script>
+
+</body>
+  </html>
