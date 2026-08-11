@@ -1,0 +1,14 @@
+{
+  "name": "battle-royale-game",
+  "version": "1.0.0",
+  "description": "Battle Royale multiplayer game server",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "ws": "^8.18.3",
+    "uuid": "^11.1.0"
+  }
+}
