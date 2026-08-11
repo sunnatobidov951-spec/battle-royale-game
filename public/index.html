@@ -3,219 +3,288 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Battle Royale - Pro Edition</title>
+    <title>Battle Royale - Elite Combat Edition</title>
     <style>
         body, html {
             margin: 0; padding: 0; width: 100%; height: 100%;
-            overflow: hidden; background: #000; font-family: sans-serif;
-            touch-action: none;
+            overflow: hidden; background: #050505; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            touch-action: none; user-select: none;
         }
         #canvas-container { width: 100%; height: 100%; position: absolute; top: 0; left: 0; }
         
-        /* HUD интерфейс */
+        /* Профессиональный тактический HUD */
         .hud {
             position: absolute; pointer-events: none; color: #fff;
-            text-shadow: 1px 1px 2px #000; font-weight: bold;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.8); font-weight: 600;
         }
-        #top-left { top: 15px; left: 15px; }
-        #top-right { top: 15px; right: 15px; text-align: right; }
-        .bar { background: rgba(0,0,0,0.5); border: 2px solid #444; border-radius: 4px; padding: 5px 10px; margin-bottom: 5px; font-size: 14px; }
-        .health { color: #ff4444; }
-        .ammo { color: #ffeb3b; }
-
-        /* Джойстик и кнопки управления */
-        .controls { position: absolute; bottom: 20px; width: 100%; pointer-events: none; display: flex; justify-content: space-between; padding: 0 20px; box-sizing: border-box; }
-        .joystick-zone { width: 130px; height: 130px; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.3); border-radius: 50%; pointer-events: auto; position: relative; }
-        .joystick-knob { width: 50px; height: 50px; background: rgba(255,255,255,0.5); border-radius: 50%; position: absolute; top: 40px; left: 40px; pointer-events: none; }
+        #top-left { top: 20px; left: 20px; display: flex; flex-direction: column; gap: 8px; }
+        #top-right { top: 20px; right: 20px; text-align: right; display: flex; flex-direction: column; gap: 8px; }
         
-        .action-buttons { pointer-events: auto; display: flex; gap: 10px; align-items: flex-end; }
-        .btn { width: 70px; height: 70px; border-radius: 50%; border: none; font-weight: bold; color: #fff; font-size: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.4); outline: none; cursor: pointer; display: flex; align-items: center; justify-content: center; text-transform: uppercase; }
-        #btn-fire { background: #d32f2f; width: 85px; height: 85px; font-size: 16px; }
-        #btn-reload { background: #1976d2; }
-        #btn-shop { background: #388e3c; }
+        .panel {
+            background: rgba(15, 20, 25, 0.75); border: 1px solid rgba(255, 255, 255, 0.15);
+            backdrop-filter: blur(6px); border-radius: 6px; padding: 8px 14px; font-size: 13px;
+            letter-spacing: 0.5px; box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+        }
+        .health-bar-container { width: 140px; height: 8px; background: rgba(255,255,255,0.2); border-radius: 4px; overflow: hidden; margin-top: 4px; }
+        .health-fill { width: 100%; height: 100%; background: linear-gradient(90deg, #ff416c, #ff4b2b); transition: width 0.3s; }
+        
+        .weapon-name { color: #00ffcc; font-size: 15px; font-weight: bold; }
+        .ammo-count { font-size: 20px; color: #ffcc00; font-family: monospace; }
 
-        /* Прицел в центре */
+        /* Элементы управления (Мобильный геймпад) */
+        .controls { position: absolute; bottom: 30px; width: 100%; pointer-events: none; display: flex; justify-content: space-between; padding: 0 30px; box-sizing: wrapper; box-sizing: border-box; }
+        .joystick-zone { width: 140px; height: 140px; background: rgba(255,255,255,0.05); border: 2px solid rgba(255,255,255,0.2); border-radius: 50%; pointer-events: auto; position: relative; backdrop-filter: blur(4px); }
+        .joystick-knob { width: 60px; height: 60px; background: rgba(255,255,255,0.4); border: 2px solid rgba(255,255,255,0.6); border-radius: 50%; position: absolute; top: 40px; left: 40px; pointer-events: none; box-shadow: 0 4px 10px rgba(0,0,0,0.5); }
+        
+        .action-buttons { pointer-events: auto; display: flex; gap: 15px; align-items: flex-end; }
+        .btn { border-radius: 50%; border: none; font-weight: bold; color: #fff; box-shadow: 0 6px 15px rgba(0,0,0,0.5); outline: none; cursor: pointer; display: flex; align-items: center; justify-content: center; text-transform: uppercase; transition: transform 0.1s; }
+        .btn:active { transform: scale(0.92); }
+        
+        #btn-fire { background: linear-gradient(135deg, #ff4b2b, #ff416c); width: 90px; height: 90px; font-size: 18px; border: 2px solid rgba(255,255,255,0.4); }
+        #btn-reload { background: linear-gradient(135deg, #2193b0, #6dd5ed); width: 65px; height: 65px; font-size: 12px; }
+        #btn-shop { background: linear-gradient(135deg, #11998e, #38ef7d); width: 65px; height: 65px; font-size: 12px; }
+
+        /* Профессиональный тактический прицел */
         #crosshair {
-            position: absolute; top: 50%; left: 50%; width: 10px; height: 10px;
+            position: absolute; top: 50%; left: 50%; width: 16px; height: 16px;
             transform: translate(-50%, -50%); pointer-events: none;
         }
-        #crosshair::before, #crosshair::after {
-            content: ''; position: absolute; background: rgba(255,255,255,0.8);
-        }
-        #crosshair::before { top: 4px; left: -5px; width: 20px; height: 2px; }
-        #crosshair::after { top: -5px; left: 4px; width: 2px; height: 20px; }
+        .cross-line { position: absolute; background: rgba(0, 255, 204, 0.8); box-shadow: 0 0 4px rgba(0,0,0,0.8); }
+        .c-top { top: 0; left: 7px; width: 2px; height: 6px; }
+        .c-bottom { bottom: 0; left: 7px; width: 2px; height: 6px; }
+        .c-left { top: 7px; left: 0; width: 6px; height: 2px; }
+        .c-right { top: 7px; right: 0; width: 6px; height: 2px; }
     </style>
 </head>
 <body>
 
     <div id="canvas-container"></div>
-    <div id="crosshair"></div>
+    
+    <!-- Прицел -->
+    <div id="crosshair">
+        <div class="cross-line c-top"></div>
+        <div class="cross-line c-bottom"></div>
+        <div class="cross-line c-left"></div>
+        <div class="cross-line c-right"></div>
+    </div>
 
     <!-- HUD -->
     <div id="top-left" class="hud">
-        <div class="bar">❤️ HP: <span id="hp-val" class="health">100</span></div>
-        <div class="bar">🛡️ Armor: <span id="armor-val">50</span></div>
+        <div class="panel">
+            <div>ЗДОРОВЬЕ</div>
+            <div class="health-bar-container"><div id="health-fill" class="health-fill"></div></div>
+        </div>
+        <div class="panel">🛡️ БРОНЯ: <span id="armor-val" style="color: #00ffcc;">75</span></div>
     </div>
+    
     <div id="top-right" class="hud">
-        <div class="bar">🔫 <span id="weapon-val">Assault Rifle</span></div>
-        <div class="bar ammo">30 / <span id="ammo-val">120</span></div>
+        <div class="panel">
+            <div class="weapon-name">M4A1 Tactical</div>
+            <div class="ammo-count">30 / <span style="font-size: 14px; color: #aaa;">150</span></div>
+        </div>
     </div>
 
-    <!-- Контроллеры -->
+    <!-- Элементы управления -->
     <div class="controls">
         <div id="joystick" class="joystick-zone">
             <div id="joystick-knob" class="joystick-knob"></div>
         </div>
         <div class="action-buttons">
-            <button id="btn-shop" class="btn">Shop</button>
-            <button id="btn-reload" class="btn">Reload</button>
-            <button id="btn-fire" class="btn">Fire</button>
+            <button id="btn-shop" class="btn">Магазин</button>
+            <button id="btn-reload" class="btn">Перез.</button>
+            <button id="btn-fire" class="btn">ОГОНЬ</button>
         </div>
     </div>
 
-    <!-- Подключаем Three.js через CDN -->
+    <!-- Подключаем Three.js -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script>
-        // Инициализация сцены, камеры и рендерера
+        // Инициализация сцены
         const container = document.getElementById('canvas-container');
         const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x87ceeb); // Небесный цвет
-        scene.fog = new THREE.FogExp2(0x87ceeb, 0.005);
+        scene.background = new THREE.Color(0x87ceeb);
+        scene.fog = new THREE.FogExp2(0x87ceeb, 0.003);
 
-        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 1000);
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.shadowMap.enabled = true;
         renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         container.appendChild(renderer.domElement);
 
-        // Свет
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        // Освещение (закат/день)
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
         scene.add(ambientLight);
 
-        const sunLight = new THREE.DirectionalLight(0xffffff, 0.8);
-        sunLight.position.set(100, 200, 100);
+        const sunLight = new THREE.DirectionalLight(0xfffaed, 0.9);
+        sunLight.position.set(150, 300, 150);
         sunLight.castShadow = true;
         sunLight.shadow.mapSize.width = 2048;
         sunLight.shadow.mapSize.height = 2048;
+        sunLight.shadow.camera.near = 0.5;
+        sunLight.shadow.camera.far = 600;
+        const d = 150;
+        sunLight.shadow.camera.left = -d;
+        sunLight.shadow.camera.right = d;
+        sunLight.shadow.camera.top = d;
+        sunLight.shadow.camera.bottom = -d;
         scene.add(sunLight);
 
-        // Земля (Карта 500x500)
-        const groundGeo = new THREE.PlaneGeometry(500, 500, 32, 32);
-        const groundMat = new THREE.MeshStandardMaterial({ color: 0x3b7a2b, roughness: 0.9 });
+        // --- ЛАНДШАФТ И ДОРОГА ---
+        const groundGeo = new THREE.PlaneGeometry(600, 600, 32, 32);
+        const groundMat = new THREE.MeshStandardMaterial({ color: 0x416523, roughness: 0.95 });
         const ground = new THREE.Mesh(groundGeo, groundMat);
         ground.rotation.x = -Math.PI / 2;
         ground.receiveShadow = true;
         scene.add(ground);
 
-        // --- СОЗДАНИЕ КАЧЕСТВЕННОГО ПЕРСОНАЖА (ИГРОКА) ---
+        // Дорога
+        const roadGeo = new THREE.PlaneGeometry(12, 600);
+        const roadMat = new THREE.MeshStandardMaterial({ color: 0x2b2b2b, roughness: 0.8 });
+        const road = new THREE.Mesh(roadGeo, roadMat);
+        road.rotation.x = -Math.PI / 2;
+        road.position.y = 0.02;
+        road.receiveShadow = true;
+        scene.add(road);
+
+        // --- ДЕТАЛИЗИРОВАННЫЙ БОЕЦ (ТАКТИЧЕСКИЙ СТИЛЬ) ---
         const playerGroup = new THREE.Group();
 
-        // Торс
-        const bodyMat = new THREE.MeshStandardMaterial({ color: 0x1e3d59 });
-        const bodyGeo = new THREE.BoxGeometry(0.8, 1.2, 0.4);
-        const body = new THREE.Mesh(bodyGeo, bodyMat);
-        body.position.y = 1.0;
-        body.castShadow = true;
-        playerGroup.add(body);
+        // Материалы одежды и брони
+        const pantsMat = new THREE.MeshStandardMaterial({ color: 0x1f2b1d, roughness: 0.8 });
+        const vestMat = new THREE.MeshStandardMaterial({ color: 0x3d443b, roughness: 0.7 });
+        const skinMat = new THREE.MeshStandardMaterial({ color: 0xd4a373, roughness: 0.6 });
+        const helmetMat = new THREE.MeshStandardMaterial({ color: 0x2e352b, roughness: 0.5 });
+        const metalMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, metalness: 0.8, roughness: 0.2 });
 
-        // Голова
-        const headMat = new THREE.MeshStandardMaterial({ color: 0xd4a373 });
-        const headGeo = new THREE.SphereGeometry(0.35, 16, 16);
-        const head = new THREE.Mesh(headGeo, headMat);
-        head.position.y = 1.8;
+        // Ноги
+        const legGeo = new THREE.BoxGeometry(0.3, 0.9, 0.35);
+        const legLeft = new THREE.Mesh(legGeo, pantsMat);
+        legLeft.position.set(-0.2, 0.45, 0);
+        legLeft.castShadow = true;
+        playerGroup.add(legLeft);
+
+        const legRight = new THREE.Mesh(legGeo, pantsMat);
+        legRight.position.set(0.2, 0.45, 0);
+        legRight.castShadow = true;
+        playerGroup.add(legRight);
+
+        // Торс и разгрузочный жилет
+        const torsoGeo = new THREE.BoxGeometry(0.7, 1.0, 0.4);
+        const torso = new THREE.Mesh(torsoGeo, vestMat);
+        torso.position.y = 1.35;
+        torso.castShadow = true;
+        playerGroup.add(torso);
+
+        // Голова в шлеме
+        const headGeo = new THREE.SphereGeometry(0.3, 16, 16);
+        const head = new THREE.Mesh(headGeo, skinMat);
+        head.position.y = 2.0;
         head.castShadow = true;
         playerGroup.add(head);
 
-        // Оружие в руках
-        const gunMat = new THREE.MeshStandardMaterial({ color: 0x222222 });
-        const gunGeo = new THREE.BoxGeometry(0.2, 0.2, 1.2);
-        const gun = new THREE.Mesh(gunGeo, gunMat);
-        gun.position.set(0.4, 1.1, 0.6);
-        playerGroup.add(gun);
+        const helmetGeo = new THREE.SphereGeometry(0.33, 16, 16, 0, Math.PI * 2, 0, Math.PI / 1.5);
+        const helmet = new THREE.Mesh(helmetGeo, helmetMat);
+        helmet.position.y = 2.05;
+        helmet.castShadow = true;
+        playerGroup.add(helmet);
+
+        // Оружие в руках (Автомат с прикладом и оптикой)
+        const gunBody = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.2, 1.1), metalMat);
+        gunBody.position.set(0.35, 1.1, 0.5);
+        gunBody.castShadow = true;
+        playerGroup.add(gunBody);
 
         scene.add(playerGroup);
         playerGroup.position.set(0, 0, 0);
 
-        // --- ОКРУЖЕНИЕ (ДЕРЕВЬЯ, КАМНИ, ДОМ, ТАНК) ---
-
-        // Функция создания низкополигонального дерева
-        function createTree(x, z) {
-            const treeGroup = new THREE.Group();
-            
-            // Ствол
-            const trunkMat = new THREE.MeshStandardMaterial({ color: 0x8b5a2b });
-            const trunkGeo = new THREE.CylinderGeometry(0.3, 0.4, 2, 6);
-            const trunk = new THREE.Mesh(trunkGeo, trunkMat);
-            trunk.position.y = 1;
+        // --- ОКРУЖЕНИЕ (ДЕРЕВЬЯ, КАМНИ, БАЗА, ТЕХНИКА) ---
+        function createPineTree(x, z) {
+            const tree = new THREE.Group();
+            const trunk = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.25, 0.35, 2.2, 6),
+                new THREE.MeshStandardMaterial({ color: 0x5c4033 })
+            );
+            trunk.position.y = 1.1;
             trunk.castShadow = true;
-            treeGroup.add(trunk);
+            tree.add(trunk);
 
-            // Крона
-            const leavesMat = new THREE.MeshStandardMaterial({ color: 0x2d5a27 });
-            const leavesGeo = new THREE.ConeGeometry(1.8, 3, 6);
-            const leaves = new THREE.Mesh(leavesGeo, leavesMat);
-            leaves.position.y = 3;
-            leaves.castShadow = true;
-            treeGroup.add(leaves);
+            const leaves1 = new THREE.Mesh(
+                new THREE.ConeGeometry(1.6, 2.5, 6),
+                new THREE.MeshStandardMaterial({ color: 0x1b3b1a })
+            );
+            leaves1.position.y = 2.6;
+            leaves1.castShadow = true;
+            tree.add(leaves1);
 
-            treeGroup.position.set(x, 0, z);
-            scene.add(treeGroup);
+            const leaves2 = new THREE.Mesh(
+                new THREE.ConeGeometry(1.2, 2.0, 6),
+                new THREE.MeshStandardMaterial({ color: 0x234d20 })
+            );
+            leaves2.position.y = 4.0;
+            leaves2.castShadow = true;
+            tree.add(leaves2);
+
+            tree.position.set(x, 0, z);
+            scene.add(tree);
         }
 
-        // Генерация леса вокруг
-        for(let i = 0; i < 40; i++) {
-            let x = (Math.random() - 0.5) * 300;
-            let z = (Math.random() - 0.5) * 300;
-            if(Math.abs(x) > 10 || Math.abs(z) > 10) {
-                createTree(x, z);
+        // Генерация леса
+        for (let i = 0; i < 60; i++) {
+            let x = (Math.random() - 0.5) * 450;
+            let z = (Math.random() - 0.5) * 450;
+            if (Math.abs(x) > 10 || Math.abs(z) > 15) {
+                createPineTree(x, z);
             }
         }
 
-        // Дом (База)
-        const houseGroup = new THREE.Group();
-        const wallMat = new THREE.MeshStandardMaterial({ color: 0xdcdcdc });
-        const wallGeo = new THREE.BoxGeometry(10, 5, 10);
-        const walls = new THREE.Mesh(wallGeo, wallMat);
-        walls.position.y = 2.5;
+        // База (Ангар / Здание)
+        const building = new THREE.Group();
+        const wallMat = new THREE.MeshStandardMaterial({ color: 0x708090, roughness: 0.6 });
+        const walls = new THREE.Mesh(new THREE.BoxGeometry(14, 6, 18), wallMat);
+        walls.position.y = 3;
         walls.castShadow = true;
-        houseGroup.add(walls);
+        building.add(walls);
 
-        const roofMat = new THREE.MeshStandardMaterial({ color: 0xb22222 });
-        const roofGeo = new THREE.ConeGeometry(8, 4, 4);
-        const roof = new THREE.Mesh(roofGeo, roofMat);
-        roof.position.y = 6.5;
-        roof.rotation.y = Math.PI / 4;
+        const roofMat = new THREE.MeshStandardMaterial({ color: 0x4a5d4e, roughness: 0.5 });
+        const roof = new THREE.Mesh(new THREE.BoxGeometry(15, 0.8, 19), roofMat);
+        roof.position.y = 6.4;
         roof.castShadow = true;
-        houseGroup.add(roof);
+        building.add(roof);
 
-        houseGroup.position.set(25, 0, -25);
-        scene.add(houseGroup);
+        building.position.set(30, 0, -30);
+        scene.add(building);
 
-        // Танк / Машина
-        const tankGroup = new THREE.Group();
-        const tankBaseMat = new THREE.MeshStandardMaterial({ color: 0x556b2f });
-        const tankBaseGeo = new THREE.BoxGeometry(4, 1.5, 6);
-        const tankBase = new THREE.Mesh(tankBaseGeo, tankBaseMat);
-        tankBase.position.y = 0.75;
-        tankBase.castShadow = true;
-        tankGroup.add(tankBase);
+        // Военный внедорожник (УАЗ / Джип)
+        const jeep = new THREE.Group();
+        const bodyMatCar = new THREE.MeshStandardMaterial({ color: 0x3b4d38, roughness: 0.4 });
+        const carBody = new THREE.Mesh(new THREE.BoxGeometry(2.2, 1.2, 4.5), bodyMatCar);
+        carBody.position.y = 0.9;
+        carBody.castShadow = true;
+        jeep.add(carBody);
 
-        const turretGeo = new THREE.CylinderGeometry(1.2, 1.4, 1, 12);
-        const turret = new THREE.Mesh(turretGeo, tankBaseMat);
-        turret.position.y = 1.8;
-        tankGroup.add(turret);
+        const carTop = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.9, 2.2), bodyMatCar);
+        carTop.position.set(0, 1.9, -0.3);
+        carTop.castShadow = true;
+        jeep.add(carTop);
 
-        const barrelGeo = new THREE.CylinderGeometry(0.2, 0.2, 4, 8);
-        const barrel = new THREE.Mesh(barrelGeo, new THREE.MeshStandardMaterial({ color: 0x222222 }));
-        barrel.rotation.x = Math.PI / 2;
-        barrel.position.set(0, 1.8, 2.5);
-        tankGroup.add(barrel);
+        // Колеса
+        const wheelGeo = new THREE.CylinderGeometry(0.45, 0.45, 0.3, 16);
+        wheelGeo.rotateZ(Math.PI / 2);
+        const wheelMat = new THREE.MeshStandardMaterial({ color: 0x111111 });
+        
+        [[1.1, 0.45, 1.4], [-1.1, 0.45, 1.4], [1.1, 0.45, -1.4], [-1.1, 0.45, -1.4]].forEach(pos => {
+            const wheel = new THREE.Mesh(wheelGeo, wheelMat);
+            wheel.position.set(...pos);
+            wheel.castShadow = true;
+            jeep.add(wheel);
+        });
 
-        tankGroup.position.set(-20, 0, -15);
-        scene.add(tankGroup);
+        jeep.position.set(-22, 0, -20);
+        jeep.rotation.y = 0.5;
+        scene.add(jeep);
 
-        // Управление камерой и движением
+        // --- УПРАВЛЕНИЕ И ДВИЖЕНИЕ ---
         let moveX = 0, moveZ = 0;
         const joystick = document.getElementById('joystick');
         const knob = document.getElementById('joystick-knob');
@@ -233,7 +302,7 @@
             let dx = e.clientX - joyCenter.x;
             let dy = e.clientY - joyCenter.y;
             let dist = Math.sqrt(dx * dx + dy * dy);
-            let maxDist = 40;
+            let maxDist = 45;
             if (dist > maxDist) {
                 dx = (dx / dist) * maxDist;
                 dy = (dy / dist) * maxDist;
@@ -249,29 +318,29 @@
             knob.style.transform = `translate(0px, 0px)`;
         });
 
-        // Игровой цикл
+        // Игровой цикл анимации
         function animate() {
             requestAnimationFrame(animate);
 
             // Движение игрока
             if (moveX !== 0 || moveZ !== 0) {
-                playerGroup.position.x += moveX * 0.3;
-                playerGroup.position.z += moveZ * 0.3;
+                playerGroup.position.x += moveX * 0.32;
+                playerGroup.position.z += moveZ * 0.32;
                 playerGroup.rotation.y = Math.atan2(moveX, moveZ);
             }
 
-            // Плавное следование камеры за игроком (вид от 3-го лица в стиле PUBG)
-            camera.position.x = playerGroup.position.x - Math.sin(playerGroup.rotation.y) * 6;
-            camera.position.y = playerGroup.position.y + 4;
-            camera.position.z = playerGroup.position.z - Math.cos(playerGroup.rotation.y) * 6;
-            camera.lookAt(playerGroup.position.x, playerGroup.position.y + 1.2, playerGroup.position.z);
+            // Плавная камера от 3-го лица в стиле шутеров
+            camera.position.x = playerGroup.position.x - Math.sin(playerGroup.rotation.y) * 6.5;
+            camera.position.y = playerGroup.position.y + 3.8;
+            camera.position.z = playerGroup.position.z - Math.cos(playerGroup.rotation.y) * 6.5;
+            camera.lookAt(playerGroup.position.x, playerGroup.position.y + 1.4, playerGroup.position.z);
 
             renderer.render(scene, camera);
         }
 
         animate();
 
-        // Адаптация при изменении размера экрана
+        // Адаптация под размер экрана
         window.addEventListener('resize', () => {
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
