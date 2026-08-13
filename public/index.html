@@ -1,505 +1,305 @@
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-<title>Battle Royale</title>
-<style>
-  * { margin:0; padding:0; box-sizing:border-box; -webkit-user-select:none; user-select:none; -webkit-tap-highlight-color:transparent; touch-action:none; }
-  html, body { width:100%; height:100%; overflow:hidden; background:#0a0a0a; font-family:-apple-system,'Segoe UI',Roboto,sans-serif; }
+// ===================== РЕНДЕР КАРТЫ =====================
+const ctx = canvas.getContext('2d');
 
-  /* ---------- Экран поворота ---------- */
-  #rotateHint {
-    position:fixed; inset:0; background:#000; color:#fff; z-index:9999;
-    display:none; flex-direction:column; align-items:center; justify-content:center; gap:16px; text-align:center; padding:20px;
-  }
-  #rotateHint.show { display:flex; }
-  #rotateHint .icon { font-size:48px; animation:rot 1.6s ease-in-out infinite; }
-  @keyframes rot { 0%,100%{transform:rotate(0deg);} 50%{transform:rotate(90deg);} }
+function resizeCanvas() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
 
-  /* ---------- Игровой canvas ---------- */
-  #gameCanvas { position:fixed; inset:0; width:100%; height:100%; background:#3a4a2f; display:block; }
+const WORLD_SCALE = 5;
+const MAP_OBJECTS = [];
 
-  /* ---------- HUD верх ---------- */
-  #hudTop {
-    position:fixed; top:0; left:0; right:0; display:flex; justify-content:space-between;
-    padding:10px 14px; pointer-events:none; z-index:50;
-  }
-  .hp-wrap { display:flex; flex-direction:column; gap:4px; pointer-events:none; }
-  .bar-bg { width:160px; height:14px; background:rgba(0,0,0,0.5); border-radius:7px; overflow:hidden; border:1px solid rgba(255,255,255,0.2); }
-  .bar-fill { height:100%; border-radius:7px; transition:width 0.2s; }
-  #hpFill { background:linear-gradient(90deg,#e74c3c,#ff6b5b); }
-  #armorFill { background:linear-gradient(90deg,#3498db,#5dade2); width:0%; }
-  .bar-label { font-size:11px; color:#fff; text-shadow:0 1px 2px rgba(0,0,0,0.8); }
-  #zoneInfo { color:#fff; font-size:12px; text-align:right; text-shadow:0 1px 3px rgba(0,0,0,0.8); }
-  #killFeed { position:fixed; top:60px; right:14px; display:flex; flex-direction:column; gap:4px; align-items:flex-end; z-index:50; pointer-events:none; }
-  .kill-msg { background:rgba(0,0,0,0.55); color:#fff; font-size:12px; padding:4px 10px; border-radius:6px; animation:fadeout 4s forwards; }
-  @keyframes fadeout { 0%,70%{opacity:1;} 100%{opacity:0;} }
+function seededRandom(seed) {
+  let x = Math.sin(seed * 9999.91) * 43758.5453;
+  return x - Math.floor(x);
+}
 
-  #ammoHud { position:fixed; bottom:14px; left:50%; transform:translateX(-50%); color:#fff; font-size:14px; font-weight:700; text-shadow:0 1px 3px rgba(0,0,0,0.8); z-index:50; pointer-events:none; text-align:center; }
-  #weaponName { font-size:11px; opacity:0.85; font-weight:500; }
+// Генерируем стабильную карту
+for (let i = 0; i < 180; i++) {
+  const x = 10 + seededRandom(i * 3 + 1) * (worldSize - 20);
+  const z = 10 + seededRandom(i * 3 + 2) * (worldSize - 20);
+  const type = i % 12 === 0 ? 'car' :
+               i % 17 === 0 ? 'building' :
+               i % 9 === 0 ? 'rock' : 'tree';
 
-  /* ---------- Джойстик (слева) ---------- */
-  #joystickZone { position:fixed; left:0; bottom:0; width:45%; height:60%; z-index:60; }
-  #joyBase {
-    position:absolute; width:110px; height:110px; border-radius:50%;
-    background:rgba(255,255,255,0.12); border:2px solid rgba(255,255,255,0.35);
-    display:none; align-items:center; justify-content:center;
-  }
-  #joyStick {
-    width:48px; height:48px; border-radius:50%;
-    background:rgba(255,255,255,0.55); border:1px solid rgba(255,255,255,0.7);
-  }
+  MAP_OBJECTS.push({
+    x,
+    z,
+    type,
+    size: 0.8 + seededRandom(i * 7) * 1.2
+  });
+}
 
-  /* ---------- Правая сторона: кнопки ---------- */
-  #rightControls { position:fixed; right:0; bottom:0; width:55%; height:100%; z-index:60; pointer-events:none; }
-  .ctrl-btn {
-    position:absolute; pointer-events:auto; border-radius:50%; display:flex; align-items:center; justify-content:center;
-    color:#fff; font-size:11px; font-weight:700; text-align:center; line-height:1.2;
-    background:rgba(255,255,255,0.15); border:2px solid rgba(255,255,255,0.4);
-    -webkit-tap-highlight-color:transparent;
-  }
-  .ctrl-btn:active, .ctrl-btn.active { background:rgba(255,255,255,0.35); }
-  #btnFire {
-    width:92px; height:92px; right:26px; bottom:80px;
-    background:rgba(231,76,60,0.35); border-color:rgba(255,120,100,0.6);
-    font-size:13px;
-  }
-  #btnAim { width:56px; height:56px; right:130px; bottom:150px; }
-  #btnJump { width:56px; height:56px; right:26px; bottom:190px; }
-  #btnCrouch { width:56px; height:56px; right:100px; bottom:60px; }
-  #btnStand { width:50px; height:50px; right:170px; bottom:40px; font-size:10px; }
-  #btnPickup { width:50px; height:50px; right:16px; bottom:290px; font-size:10px; }
-  #btnShop { position:fixed; top:10px; left:50%; transform:translateX(-50%); pointer-events:auto; z-index:60;
-    background:rgba(0,0,0,0.5); color:#fff; border:1px solid rgba(255,255,255,0.3); border-radius:8px; padding:6px 16px; font-size:12px; display:none; }
-
-  /* ---------- Прицел ---------- */
-  #crosshair {
-    position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); width:22px; height:22px; z-index:40; pointer-events:none;
-  }
-  #crosshair::before, #crosshair::after {
-    content:''; position:absolute; background:rgba(255,255,255,0.85);
-  }
-  #crosshair::before { width:2px; height:22px; left:10px; top:0; }
-  #crosshair::after { width:22px; height:2px; top:10px; left:0; }
-
-  /* ---------- Магазин ---------- */
-  #shopOverlay { position:fixed; inset:0; background:rgba(0,0,0,0.75); z-index:200; display:none; align-items:center; justify-content:center; }
-  #shopOverlay.show { display:flex; }
-  #shopBox { background:#1a1d24; border-radius:14px; padding:18px; width:min(520px,92%); max-height:80vh; overflow-y:auto; color:#fff; }
-  #shopBox h3 { margin-bottom:12px; font-size:18px; }
-  .shop-item { display:flex; justify-content:space-between; align-items:center; padding:10px 12px; background:#262a33; border-radius:10px; margin-bottom:8px; }
-  .shop-item button { background:#2563eb; color:#fff; border:none; padding:8px 14px; border-radius:8px; font-weight:700; font-size:13px; }
-  .shop-item button:disabled { background:#555; }
-  #closeShop { margin-top:10px; width:100%; padding:12px; background:#444; color:#fff; border:none; border-radius:10px; font-weight:700; }
-
-  /* ---------- Экран статуса матча ---------- */
-  #matchOverlay { position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:300; display:none; align-items:center; justify-content:center; color:#fff; text-align:center; }
-  #matchOverlay.show { display:flex; }
-  #matchOverlay h1 { font-size:32px; margin-bottom:10px; }
-</style>
-</head>
-<body>
-
-  <div id="rotateHint"><div class="icon">📱</div><div>Поверните телефон горизонтально</div></div>
-
-  <canvas id="gameCanvas"></canvas>
-  <div id="crosshair"></div>
-
-  <div id="hudTop">
-    <div class="hp-wrap">
-      <div class="bar-label" id="hpLabel">HP 100</div>
-      <div class="bar-bg"><div class="bar-fill" id="hpFill" style="width:100%"></div></div>
-      <div class="bar-bg"><div class="bar-fill" id="armorFill" style="width:0%"></div></div>
-    </div>
-    <div id="zoneInfo">Игроков жив: <span id="aliveCount">-</span></div>
-  </div>
-
-  <div id="killFeed"></div>
-
-  <button id="btnShop">🛒 Магазин</button>
-
-  <div id="ammoHud">
-    <div id="weaponName">Пистолет</div>
-    <div id="ammoCount">30 / 30</div>
-  </div>
-
-  <div id="joystickZone">
-    <div id="joyBase"><div id="joyStick"></div></div>
-  </div>
-
-  <div id="rightControls">
-    <div class="ctrl-btn" id="btnAim">🔭<br>Прицел</div>
-    <div class="ctrl-btn" id="btnJump">⬆️<br>Прыжок</div>
-    <div class="ctrl-btn" id="btnCrouch">⬇️<br>Присесть</div>
-    <div class="ctrl-btn" id="btnStand">Встать</div>
-    <div class="ctrl-btn" id="btnPickup">🎒<br>Взять</div>
-    <div class="ctrl-btn" id="btnFire">🔫<br>ОГОНЬ</div>
-  </div>
-
-  <div id="shopOverlay">
-    <div id="shopBox">
-      <h3>🛒 Магазин — Баланс: <span id="shopCurrency">0</span></h3>
-      <div id="shopList"></div>
-      <button id="closeShop">Закрыть</button>
-    </div>
-  </div>
-
-  <div id="matchOverlay">
-    <div>
-      <h1 id="matchTitle"></h1>
-      <div id="matchSub"></div>
-    </div>
-  </div>
-
-<script>
-(function() {
-  // ===================== ОРИЕНТАЦИЯ =====================
-  function checkOrientation() {
-    const hint = document.getElementById('rotateHint');
-    if (window.innerHeight > window.innerWidth) hint.classList.add('show');
-    else hint.classList.remove('show');
-  }
-  window.addEventListener('resize', checkOrientation);
-  window.addEventListener('orientationchange', checkOrientation);
-  checkOrientation();
-
-  // ===================== WEBSOCKET =====================
-  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const ws = new WebSocket(protocol + '//' + location.host);
-  let myId = null;
-  let worldSize = 600;
-  let weaponsConfig = {};
-  let latestState = null;
-  let myPlayer = null;
-
-  ws.onmessage = (ev) => {
-    let data;
-    try { data = JSON.parse(ev.data); } catch(e) { return; }
-    if (data.type === 'init') {
-      myId = data.id;
-      worldSize = data.worldSize;
-      weaponsConfig = data.config.weapons;
-    } else if (data.type === 'state') {
-      latestState = data;
-      myPlayer = data.players.find(p => p.id === myId) || null;
-      updateHud();
-      renderShopIfOpen();
-    } else if (data.type === 'death') {
-      if (data.playerId === myId) showMatchOverlay('Вы погибли', '');
-    } else if (data.type === 'hit') {
-      // можно добавить визуальный эффект попадания
-    } else if (data.type === 'winner') {
-      showMatchOverlay(data.playerId === myId ? '🏆 Победа!' : 'Матч завершён', 'Победитель определён');
-    } else if (data.type === 'draw') {
-      showMatchOverlay('Ничья', 'Все выбыли');
-    }
-  };
-
-  function send(obj) {
-    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
-  }
-
-  // ===================== HUD =====================
-  function updateHud() {
-    if (!myPlayer) return;
-    document.getElementById('hpFill').style.width = Math.max(0, myPlayer.health) + '%';
-    document.getElementById('hpLabel').textContent = 'HP ' + Math.round(myPlayer.health);
-    document.getElementById('armorFill').style.width = (myPlayer.armor || 0) + '%';
-    const weapon = weaponsConfig[myPlayer.weapon];
-    document.getElementById('weaponName').textContent = weapon ? weapon.name : '-';
-    document.getElementById('ammoCount').textContent = (myPlayer.ammo ?? 0) + ' / ' + (myPlayer.ammo ?? 0);
-    document.getElementById('shopCurrency').textContent = myPlayer.currency || 0;
-
-    const aliveP = latestState.players.filter(p => p.alive).length;
-    const aliveB = (latestState.bots || []).filter(b => b.alive).length;
-    document.getElementById('aliveCount').textContent = (aliveP + aliveB);
-  }
-
-  function showMatchOverlay(title, sub) {
-    document.getElementById('matchTitle').textContent = title;
-    document.getElementById('matchSub').textContent = sub;
-    const ov = document.getElementById('matchOverlay');
-    ov.classList.add('show');
-    setTimeout(() => ov.classList.remove('show'), 4500);
-  }
-
-  // ===================== ДЖОЙСТИК (движение) =====================
-  const joyZone = document.getElementById('joystickZone');
-  const joyBase = document.getElementById('joyBase');
-  const joyStick = document.getElementById('joyStick');
-  let joyTouchId = null;
-  let joyCenter = { x:0, y:0 };
-  const JOY_RADIUS = 55;
-
-  function joyStart(x, y, id) {
-    joyTouchId = id;
-    joyCenter = { x, y };
-    joyBase.style.left = (x - 55) + 'px';
-    joyBase.style.top = (y - 55) + 'px';
-    joyBase.style.display = 'flex';
-    joyStick.style.transform = 'translate(0px,0px)';
-  }
-
-  function joyMove(x, y) {
-    let dx = x - joyCenter.x;
-    let dy = y - joyCenter.y;
-    const dist = Math.min(JOY_RADIUS, Math.sqrt(dx*dx + dy*dy));
-    const angle = Math.atan2(dy, dx);
-    const stickX = Math.cos(angle) * dist;
-    const stickY = Math.sin(angle) * dist;
-    joyStick.style.transform = `translate(${stickX}px, ${stickY}px)`;
-
-    // нормализованный вектор направления
-    const nx = dist > 8 ? Math.cos(angle) : 0;
-    const ny = dist > 8 ? Math.sin(angle) : 0;
-
-    // переводим экранные X/Y в forward/backward/left/right относительно камеры
-    // экранный "вверх" (ny<0) = forward, "вниз" = backward, "влево" = left, "вправо" = right
-    const input = {
-      forward: ny < -0.35,
-      backward: ny > 0.35,
-      left: nx < -0.35,
-      right: nx > 0.35,
+function worldToScreen(pos) {
+  if (!myPlayer) {
+    return {
+      x: canvas.width / 2,
+      y: canvas.height / 2
     };
-    send({ type:'move-input', input });
   }
 
-  function joyEnd() {
-    joyTouchId = null;
-    joyBase.style.display = 'none';
-    send({ type:'move-input', input:{ forward:false, backward:false, left:false, right:false } });
+  const dx = (pos.x - myPlayer.position.x) * WORLD_SCALE;
+  const dz = (pos.z - myPlayer.position.z) * WORLD_SCALE;
+
+  return {
+    x: canvas.width / 2 + dx,
+    y: canvas.height / 2 + dz
+  };
+}
+
+function drawTree(x, y, s) {
+  // тень
+  ctx.fillStyle = 'rgba(0,0,0,0.25)';
+  ctx.beginPath();
+  ctx.ellipse(x, y + 9*s, 14*s, 7*s, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // ствол
+  ctx.fillStyle = '#6b4226';
+  ctx.fillRect(x - 3*s, y, 6*s, 18*s);
+
+  // крона
+  ctx.fillStyle = '#174d27';
+  ctx.beginPath();
+  ctx.arc(x, y - 5*s, 15*s, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#26733a';
+  ctx.beginPath();
+  ctx.arc(x - 6*s, y - 10*s, 10*s, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#3d9149';
+  ctx.beginPath();
+  ctx.arc(x + 6*s, y - 8*s, 8*s, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawCar(x, y, s) {
+  ctx.save();
+  ctx.translate(x, y);
+
+  // тень
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  ctx.fillRect(-22*s, -8*s, 44*s, 18*s);
+
+  // кузов
+  ctx.fillStyle = '#34495e';
+  ctx.fillRect(-20*s, -10*s, 40*s, 20*s);
+
+  // кабина
+  ctx.fillStyle = '#17202a';
+  ctx.fillRect(-10*s, -8*s, 20*s, 12*s);
+
+  // окна
+  ctx.fillStyle = '#8fd3ff';
+  ctx.fillRect(-8*s, -6*s, 7*s, 6*s);
+  ctx.fillRect(1*s, -6*s, 7*s, 6*s);
+
+  // колёса
+  ctx.fillStyle = '#111';
+  ctx.beginPath();
+  ctx.arc(-14*s, 11*s, 5*s, 0, Math.PI * 2);
+  ctx.arc(14*s, 11*s, 5*s, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore();
+}
+
+function drawBuilding(x, y, s) {
+  ctx.fillStyle = 'rgba(0,0,0,0.25)';
+  ctx.fillRect(x - 22*s, y - 18*s, 46*s, 40*s);
+
+  ctx.fillStyle = '#8b7355';
+  ctx.fillRect(x - 20*s, y - 20*s, 40*s, 36*s);
+
+  ctx.fillStyle = '#4b3024';
+  ctx.beginPath();
+  ctx.moveTo(x - 25*s, y - 20*s);
+  ctx.lineTo(x, y - 35*s);
+  ctx.lineTo(x + 25*s, y - 20*s);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.fillStyle = '#222';
+  ctx.fillRect(x - 6*s, y - 5*s, 12*s, 21*s);
+
+  ctx.fillStyle = '#b9e7ff';
+  ctx.fillRect(x - 16*s, y - 12*s, 8*s, 8*s);
+  ctx.fillRect(x + 8*s, y - 12*s, 8*s, 8*s);
+}
+
+function drawRock(x, y, s) {
+  ctx.fillStyle = 'rgba(0,0,0,0.25)';
+  ctx.beginPath();
+  ctx.ellipse(x, y + 6*s, 14*s, 7*s, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#777';
+  ctx.beginPath();
+  ctx.moveTo(x - 13*s, y + 5*s);
+  ctx.lineTo(x - 8*s, y - 10*s);
+  ctx.lineTo(x + 5*s, y - 14*s);
+  ctx.lineTo(x + 15*s, y);
+  ctx.lineTo(x + 9*s, y + 10*s);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawMapObject(obj) {
+  const p = worldToScreen({ x: obj.x, z: obj.z });
+
+  if (
+    p.x < -100 ||
+    p.x > canvas.width + 100 ||
+    p.y < -100 ||
+    p.y > canvas.height + 100
+  ) return;
+
+  if (obj.type === 'tree') {
+    drawTree(p.x, p.y, obj.size);
+  } else if (obj.type === 'car') {
+    drawCar(p.x, p.y, obj.size);
+  } else if (obj.type === 'building') {
+    drawBuilding(p.x, p.y, obj.size);
+  } else {
+    drawRock(p.x, p.y, obj.size);
   }
+}
 
-  joyZone.addEventListener('touchstart', (e) => {
-    if (joyTouchId !== null) return;
-    const t = e.changedTouches[0];
-    joyStart(t.clientX, t.clientY, t.identifier);
-  }, { passive:true });
+function draw() {
 
-  joyZone.addEventListener('touchmove', (e) => {
-    for (const t of e.changedTouches) {
-      if (t.identifier === joyTouchId) joyMove(t.clientX, t.clientY);
-    }
-  }, { passive:true });
+  // земля
+  ctx.fillStyle = '#4b6535';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  joyZone.addEventListener('touchend', (e) => {
-    for (const t of e.changedTouches) {
-      if (t.identifier === joyTouchId) joyEnd();
-    }
-  }, { passive:true });
+  // трава
+  ctx.strokeStyle = 'rgba(120,150,70,0.35)';
+  ctx.lineWidth = 1;
 
-  // мышь для десктоп-теста
-  let mouseJoyActive = false;
-  joyZone.addEventListener('mousedown', (e) => { mouseJoyActive = true; joyStart(e.clientX, e.clientY, 'mouse'); });
-  window.addEventListener('mousemove', (e) => { if (mouseJoyActive) joyMove(e.clientX, e.clientY); });
-  window.addEventListener('mouseup', () => { if (mouseJoyActive) { mouseJoyActive = false; joyEnd(); } });
-
-  // ===================== ПОВОРОТ КАМЕРЫ (свайп по правой части экрана, вне кнопок) =====================
-  let camYaw = 0, camPitch = 0;
-  let lookTouchId = null;
-  let lookLastX = 0, lookLastY = 0;
-
-  function isOnButton(x, y) {
-    const els = document.elementsFromPoint(x, y);
-    return els.some(el => el.classList && el.classList.contains('ctrl-btn'));
-  }
-
-  document.addEventListener('touchstart', (e) => {
-    for (const t of e.changedTouches) {
-      if (t.clientX > window.innerWidth * 0.42 && lookTouchId === null && !isOnButton(t.clientX, t.clientY)) {
-        lookTouchId = t.identifier;
-        lookLastX = t.clientX; lookLastY = t.clientY;
-      }
-    }
-  }, { passive:true });
-
-  document.addEventListener('touchmove', (e) => {
-    for (const t of e.changedTouches) {
-      if (t.identifier === lookTouchId) {
-        const dx = t.clientX - lookLastX;
-        const dy = t.clientY - lookLastY;
-        lookLastX = t.clientX; lookLastY = t.clientY;
-        camYaw -= dx * 0.005;
-        camPitch = Math.max(-1.2, Math.min(1.2, camPitch - dy * 0.005));
-        send({ type:'rotate', yaw: camYaw, pitch: camPitch });
-      }
-    }
-  }, { passive:true });
-
-  document.addEventListener('touchend', (e) => {
-    for (const t of e.changedTouches) {
-      if (t.identifier === lookTouchId) lookTouchId = null;
-    }
-  }, { passive:true });
-
-  // ===================== КНОПКИ =====================
-  function bindHold(el, onDown, onUp) {
-    el.addEventListener('touchstart', (e) => { e.preventDefault(); el.classList.add('active'); onDown && onDown(); }, { passive:false });
-    el.addEventListener('touchend', (e) => { e.preventDefault(); el.classList.remove('active'); onUp && onUp(); }, { passive:false });
-    el.addEventListener('mousedown', () => { el.classList.add('active'); onDown && onDown(); });
-    el.addEventListener('mouseup', () => { el.classList.remove('active'); onUp && onUp(); });
-  }
-
-  // Огонь — стреляем очередью, пока держим кнопку
-  let firing = false, fireInterval = null;
-  bindHold(document.getElementById('btnFire'),
-    () => {
-      firing = true;
-      send({ type:'shoot' });
-      fireInterval = setInterval(() => { if (firing) send({ type:'shoot' }); }, 90);
-    },
-    () => { firing = false; clearInterval(fireInterval); }
-  );
-
-  // Прицел (зум камеры)
-  const canvas = document.getElementById('gameCanvas');
-  let aiming = false;
-  bindHold(document.getElementById('btnAim'),
-    () => { aiming = true; canvas.style.transform = 'scale(1.4)'; },
-    () => { aiming = false; canvas.style.transform = 'scale(1)'; }
-  );
-
-  // Прыжок / присесть / встать — визуально пока (сервер расширим отдельно под jump/crouch)
-  let crouching = false;
-  document.getElementById('btnJump').addEventListener('touchstart', (e) => { e.preventDefault(); send({ type:'jump' }); });
-  document.getElementById('btnJump').addEventListener('click', () => send({ type:'jump' }));
-
-  document.getElementById('btnCrouch').addEventListener('touchstart', (e) => { e.preventDefault(); crouching = true; send({ type:'crouch', value:true }); });
-  document.getElementById('btnCrouch').addEventListener('click', () => { crouching = true; send({ type:'crouch', value:true }); });
-
-  document.getElementById('btnStand').addEventListener('touchstart', (e) => { e.preventDefault(); crouching = false; send({ type:'crouch', value:false }); });
-  document.getElementById('btnStand').addEventListener('click', () => { crouching = false; send({ type:'crouch', value:false }); });
-
-  // Подобрать ближайший лут
-  document.getElementById('btnPickup').addEventListener('touchstart', (e) => {
-    e.preventDefault();
-    pickupNearest();
-  });
-  document.getElementById('btnPickup').addEventListener('click', pickupNearest);
-
-  function pickupNearest() {
-    if (!latestState || !myPlayer) return;
-    let nearest = null, minD = Infinity;
-    for (const item of latestState.loot) {
-      const dx = item.position.x - myPlayer.position.x;
-      const dz = item.position.z - myPlayer.position.z;
-      const d = Math.sqrt(dx*dx + dz*dz);
-      if (d < minD) { minD = d; nearest = item; }
-    }
-    if (nearest && minD < 5) send({ type:'pickup', lootId: nearest.id });
-  }
-
-  // ===================== МАГАЗИН =====================
-  const btnShop = document.getElementById('btnShop');
-  const shopOverlay = document.getElementById('shopOverlay');
-  document.getElementById('closeShop').addEventListener('click', () => shopOverlay.classList.remove('show'));
-  btnShop.addEventListener('click', () => {
-    renderShop();
-    shopOverlay.classList.add('show');
-  });
-
-  function renderShop() {
-    if (!latestState) return;
-    const list = document.getElementById('shopList');
-    list.innerHTML = '';
-    latestState.shop.forEach(item => {
-      const row = document.createElement('div');
-      row.className = 'shop-item';
-      const canAfford = myPlayer && (myPlayer.currency || 0) >= item.price;
-      row.innerHTML = `<span>${item.name} — ${item.price}💰</span>`;
-      const btn = document.createElement('button');
-      btn.textContent = 'Купить';
-      btn.disabled = !canAfford;
-      btn.onclick = () => send({ type:'shop-buy', itemId: item.id });
-      row.appendChild(btn);
-      list.appendChild(row);
-    });
-  }
-  function renderShopIfOpen() {
-    if (shopOverlay.classList.contains('show')) renderShop();
-  }
-
-  // Показывать кнопку магазина, если рядом есть точка магазина (упрощённо: всегда доступна во время игры)
-  setInterval(() => {
-    if (latestState && latestState.matchActive && myPlayer && myPlayer.alive) {
-      btnShop.style.display = 'block';
-    } else {
-      btnShop.style.display = 'none';
-    }
-  }, 500);
-
-  // ===================== РЕНДЕР КАРТЫ (простой top-down) =====================
-  const ctx = canvas.getContext('2d');
-  function resizeCanvas() {
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
-  }
-  window.addEventListener('resize', resizeCanvas);
-  resizeCanvas();
-
-  function worldToScreen(pos) {
-    if (!myPlayer) return { x: canvas.width/2, y: canvas.height/2 };
-    const scale = 6;
-    const dx = (pos.x - myPlayer.position.x) * scale;
-    const dz = (pos.z - myPlayer.position.z) * scale;
-    return { x: canvas.width/2 + dx, y: canvas.height/2 + dz };
-  }
-
-  function draw() {
-    ctx.fillStyle = '#3a4a2f';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    if (latestState) {
-      // Зона
-      const zonePos = worldToScreen({ x: latestState.zone.x, z: latestState.zone.z });
-      ctx.strokeStyle = 'rgba(80,160,255,0.9)';
-      ctx.lineWidth = 3;
+  for (let x = 0; x < canvas.width; x += 35) {
+    for (let y = 0; y < canvas.height; y += 35) {
       ctx.beginPath();
-      ctx.arc(zonePos.x, zonePos.y, latestState.zone.radius * 6, 0, Math.PI*2);
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + 4, y - 7);
       ctx.stroke();
-
-      // Лут
-      ctx.fillStyle = '#ffd54f';
-      latestState.loot.forEach(item => {
-        const p = worldToScreen(item.position);
-        if (p.x > -20 && p.x < canvas.width+20 && p.y > -20 && p.y < canvas.height+20) {
-          ctx.beginPath(); ctx.arc(p.x, p.y, 5, 0, Math.PI*2); ctx.fill();
-        }
-      });
-
-      // Боты
-      ctx.fillStyle = '#e74c3c';
-      (latestState.bots || []).forEach(b => {
-        if (!b.alive) return;
-        const p = worldToScreen(b.position);
-        ctx.beginPath(); ctx.arc(p.x, p.y, 8, 0, Math.PI*2); ctx.fill();
-      });
-
-      // Игроки
-      latestState.players.forEach(pl => {
-        if (!pl.alive) return;
-        const p = worldToScreen(pl.position);
-        ctx.fillStyle = (pl.id === myId) ? '#2ecc71' : '#3498db';
-        ctx.beginPath(); ctx.arc(p.x, p.y, 9, 0, Math.PI*2); ctx.fill();
-        // направление взгляда
-        const dirLen = 16;
-        const dx = -Math.sin(pl.rotation.yaw) * dirLen;
-        const dy = -Math.cos(pl.rotation.yaw) * dirLen;
-        ctx.strokeStyle = '#fff';
-        ctx.lineWidth = 2;
-        ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x+dx, p.y+dy); ctx.stroke();
-      });
     }
-
-    requestAnimationFrame(draw);
   }
-  draw();
 
-  // ===================== PING =====================
-  setInterval(() => send({ type:'ping' }), 5000);
+  if (latestState && myPlayer) {
 
-})();
-</script>
-</body>
-</html>
+    // объекты карты
+    MAP_OBJECTS.forEach(drawMapObject);
+
+    // зона
+    const zonePos = worldToScreen({
+      x: latestState.zone.x,
+      z: latestState.zone.z
+    });
+
+    ctx.strokeStyle = 'rgba(80,170,255,0.95)';
+    ctx.lineWidth = 4;
+
+    ctx.beginPath();
+    ctx.arc(
+      zonePos.x,
+      zonePos.y,
+      latestState.zone.radius * WORLD_SCALE,
+      0,
+      Math.PI * 2
+    );
+    ctx.stroke();
+
+    // лут
+    latestState.loot.forEach(item => {
+      const p = worldToScreen(item.position);
+
+      if (
+        p.x > -20 &&
+        p.x < canvas.width + 20 &&
+        p.y > -20 &&
+        p.y < canvas.height + 20
+      ) {
+        ctx.fillStyle = '#ffd54f';
+
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.strokeStyle = '#fff';
+        ctx.stroke();
+      }
+    });
+
+    // боты
+    (latestState.bots || []).forEach(bot => {
+      if (!bot.alive) return;
+
+      const p = worldToScreen(bot.position);
+
+      ctx.fillStyle = '#e74c3c';
+
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 9, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = '#fff';
+      ctx.font = '10px Arial';
+      ctx.textAlign = 'center';
+      ctx.fillText('BOT', p.x, p.y - 13);
+    });
+
+    // игроки
+    latestState.players.forEach(pl => {
+
+      if (!pl.alive) return;
+
+      const p = worldToScreen(pl.position);
+
+      ctx.fillStyle =
+        pl.id === myId
+          ? '#2ecc71'
+          : '#3498db';
+
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 10, 0, Math.PI * 2);
+      ctx.fill();
+
+      // направление
+      const dirLen = 20;
+
+      const dx =
+        -Math.sin(pl.rotation.yaw) * dirLen;
+
+      const dy =
+        -Math.cos(pl.rotation.yaw) * dirLen;
+
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 3;
+
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+      ctx.lineTo(
+        p.x + dx,
+        p.y + dy
+      );
+      ctx.stroke();
+    });
+
+    // свой игрок
+    const me = worldToScreen(myPlayer.position);
+
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 3;
+
+    ctx.beginPath();
+    ctx.arc(me.x, me.y, 15, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  requestAnimationFrame(draw);
+}
+
+draw();
