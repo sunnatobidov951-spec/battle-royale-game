@@ -19,6 +19,8 @@ const CONFIG = {
   MAX_PLAYERS: 30,
   MAX_BOTS: 20,
   MOVE_SPEED: 8,
+  CROUCH_SPEED_MULTIPLIER: 0.5,
+  JUMP_COOLDOWN: 800,
   PLAYER_HEIGHT: 1.7,
   PLAYER_EYE_HEIGHT: 1.6,
   WEAPONS: {
@@ -51,7 +53,7 @@ const CONFIG = {
   PING_RATE_LIMIT: 10,
   SHOOT_RATE_LIMIT: 20,
   MAX_MESSAGES_PER_SECOND: 30,
-  BOT_AI_INTERVAL: 500, // мс между обновлениями ботов
+  BOT_AI_INTERVAL: 500,
 };
 
 // ===================== СОСТОЯНИЕ ИГРЫ =====================
@@ -104,6 +106,10 @@ function distance2D(a, b) {
   return Math.sqrt((a.x - b.x) ** 2 + (a.z - b.z) ** 2);
 }
 
+function distance3D(a, b) {
+  return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2 + (a.z - b.z) ** 2);
+}
+
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
@@ -153,6 +159,7 @@ function createBot() {
     targetId: null,
     lastSeen: Date.now(),
     currentInput: { forward: false, backward: false, left: false, right: false },
+    crouching: false,
     aiTimer: 0,
   };
   return bot;
@@ -169,7 +176,6 @@ function spawnBots(count) {
 
 function updateBotAI(bot, deltaTime) {
   if (bot.state !== 'alive') return;
-  // Ищем ближайшего врага (игрока или другого бота)
   let target = null;
   let minDist = Infinity;
   const allEntities = { ...matchState.players, ...matchState.bots };
@@ -187,11 +193,9 @@ function updateBotAI(bot, deltaTime) {
   }
 
   if (target) {
-    // Поворот в сторону цели
     const dx = target.position.x - bot.position.x;
     const dz = target.position.z - bot.position.z;
     bot.rotation.yaw = Math.atan2(-dx, -dz);
-    // Движение к цели, если далеко
     if (minDist > 30) {
       bot.currentInput.forward = true;
       bot.currentInput.backward = false;
@@ -208,16 +212,13 @@ function updateBotAI(bot, deltaTime) {
       bot.currentInput.left = false;
       bot.currentInput.right = false;
     }
-    // Стрельба, если цель близко и есть ammo
     if (minDist < 80 && bot.ammo > 0) {
       const now = Date.now();
       const weapon = CONFIG.WEAPONS[bot.weapon];
       if (weapon && now - bot.lastShotTime > weapon.fireRate) {
         bot.lastShotTime = now;
-        // Симулируем выстрел
         const hit = performBotShot(bot, target);
         if (hit) {
-          // Уменьшаем патроны
           bot.ammo--;
           if (bot.ammo < 0) bot.ammo = 0;
         }
@@ -225,7 +226,6 @@ function updateBotAI(bot, deltaTime) {
     }
     bot.targetId = target.id;
   } else {
-    // Патрулирование: случайное блуждание
     if (Math.random() < 0.02) {
       const angle = Math.random() * 2 * Math.PI;
       bot.rotation.yaw = angle;
@@ -236,7 +236,6 @@ function updateBotAI(bot, deltaTime) {
     bot.currentInput.right = false;
   }
 
-  // Обновляем позицию (применяем движение как для игрока)
   applyMovement(bot.id, deltaTime);
 }
 
@@ -245,20 +244,17 @@ function performBotShot(bot, target) {
   if (!weapon) return false;
   const dist = distance2D(bot.position, target.position);
   if (dist > weapon.range) return false;
-  // Проверка попадания с учётом разброса
   const hitChance = Math.max(0, 1 - (dist / weapon.range) * 0.5);
   if (Math.random() > hitChance) return false;
 
-  // Урон
   let damage = weapon.damage;
-  // Проверка headshot (случайно)
   const isHeadshot = Math.random() < 0.1;
   if (isHeadshot) damage *= (weapon.headshotMultiplier || 2);
   damage = Math.round(damage);
 
   const targetPlayer = matchState.players[target.id];
   if (targetPlayer && targetPlayer.state === 'alive') {
-    targetPlayer.health = clamp(targetPlayer.health - damage, 0, 100);
+    applyDamageWithArmor(targetPlayer, damage);
     if (targetPlayer.health <= 0) {
       targetPlayer.state = 'dead';
       targetPlayer.currentInput = { forward: false, backward: false, left: false, right: false };
@@ -269,26 +265,32 @@ function performBotShot(bot, target) {
     broadcastHit(bot.id, targetPlayer.id, damage, isHeadshot, bot.weapon);
     return true;
   }
-  // Проверка ботов (взаимодействие между ботами)
   const targetBot = matchState.bots[target.id];
   if (targetBot && targetBot.state === 'alive') {
     targetBot.health = clamp(targetBot.health - damage, 0, 100);
     if (targetBot.health <= 0) {
       targetBot.state = 'dead';
       bot.kills = (bot.kills || 0) + 1;
-      // Уведомление о смерти бота
       broadcastDeath(targetBot.id, 'bullet', bot.id);
-      // Удаляем мёртвого бота через некоторое время
       setTimeout(() => {
-        if (matchState.bots[targetBot.id]) {
-          delete matchState.bots[targetBot.id];
-        }
+        if (matchState.bots[targetBot.id]) delete matchState.bots[targetBot.id];
       }, 5000);
     }
     broadcastHit(bot.id, targetBot.id, damage, isHeadshot, bot.weapon);
     return true;
   }
   return false;
+}
+
+// Учитываем броню: часть урона поглощается бронёй (только для игроков, у ботов брони нет)
+function applyDamageWithArmor(entity, rawDamage) {
+  let damage = rawDamage;
+  if (entity.armor && entity.armor > 0) {
+    const absorbed = Math.min(entity.armor, damage * 0.5);
+    entity.armor = clamp(entity.armor - absorbed, 0, 100);
+    damage -= absorbed;
+  }
+  entity.health = clamp(entity.health - damage, 0, 100);
 }
 
 // ===================== ДВИЖЕНИЕ (общее для всех) =====================
@@ -310,14 +312,33 @@ function applyMovement(entityId, deltaTime) {
   if (input.right) { moveX += rightX; moveZ += rightZ; }
   const len = Math.sqrt(moveX*moveX + moveZ*moveZ);
   if (len > 0.001) {
-    moveX = (moveX / len) * CONFIG.MOVE_SPEED * deltaTime;
-    moveZ = (moveZ / len) * CONFIG.MOVE_SPEED * deltaTime;
+    const speed = entity.crouching ? CONFIG.MOVE_SPEED * CONFIG.CROUCH_SPEED_MULTIPLIER : CONFIG.MOVE_SPEED;
+    moveX = (moveX / len) * speed * deltaTime;
+    moveZ = (moveZ / len) * speed * deltaTime;
     entity.position.x = clamp(entity.position.x + moveX, -CONFIG.WORLD_SIZE/2 + 1, CONFIG.WORLD_SIZE/2 - 1);
     entity.position.z = clamp(entity.position.z + moveZ, -CONFIG.WORLD_SIZE/2 + 1, CONFIG.WORLD_SIZE/2 - 1);
   }
 }
 
-// ===================== ЗОНА (обновлена) =====================
+// ===================== ПРЫЖОК / ПРИСЕСТЬ =====================
+function handleJump(playerId) {
+  const player = matchState.players[playerId];
+  if (!player || player.state !== 'alive') return;
+  const now = Date.now();
+  if (now - (player.lastJumpTime || 0) < CONFIG.JUMP_COOLDOWN) return;
+  player.lastJumpTime = now;
+  player.isJumping = true;
+  // Прыжок носит визуальный/тактический характер (уклонение), на сервере как короткий флаг состояния
+  setTimeout(() => { if (player) player.isJumping = false; }, 500);
+}
+
+function handleCrouch(playerId, value) {
+  const player = matchState.players[playerId];
+  if (!player || player.state !== 'alive') return;
+  player.crouching = !!value;
+}
+
+// ===================== ЗОНА =====================
 function initZone() {
   const z = matchState.zone;
   z.x = 0; z.z = 0;
@@ -347,7 +368,6 @@ function updateZone(deltaTime) {
     if (nextPhase < z.phaseTargets.length) {
       z.targetRadius = z.phaseTargets[nextPhase];
       if (z.targetRadius >= z.radius) z.targetRadius = z.radius / 2;
-      // Новый центр
       let newX, newZ, found = false;
       for (let i = 0; i < 200; i++) {
         const angle = Math.random() * 2 * Math.PI;
@@ -387,7 +407,6 @@ function updateZone(deltaTime) {
       z.nextShrinkTime = Date.now() + CONFIG.ZONE.shrinkInterval;
     }
   }
-  // Урон по игрокам и ботам вне зоны
   const entities = { ...matchState.players, ...matchState.bots };
   for (const id in entities) {
     const e = entities[id];
@@ -399,7 +418,6 @@ function updateZone(deltaTime) {
         e.state = 'dead';
         e.currentInput = { forward: false, backward: false, left: false, right: false };
         broadcastDeath(id, 'zone', null);
-        // Удаляем мёртвого бота
         if (matchState.bots[id]) {
           setTimeout(() => {
             if (matchState.bots[id]) delete matchState.bots[id];
@@ -445,16 +463,16 @@ function performShot(playerId) {
   let hitProj = Infinity;
   let headshot = false;
 
-  // Проверяем игроков и ботов
   const targets = { ...matchState.players, ...matchState.bots };
   for (const id in targets) {
     if (id === playerId) continue;
     const target = targets[id];
     if (target.state !== 'alive') continue;
-    const tPos = { x: target.position.x, y: CONFIG.PLAYER_HEIGHT/2, z: target.position.z };
+    // Приседающая цель ниже — уменьшаем эффективную высоту тела/головы
+    const crouchOffset = target.crouching ? 0.5 : 0;
+    const tPos = { x: target.position.x, y: (CONFIG.PLAYER_HEIGHT/2) - crouchOffset, z: target.position.z };
     const dist3D = distance3D(startPos, tPos);
     if (dist3D > weapon.range) continue;
-    // Проверка тела
     const to = { x: tPos.x - startPos.x, y: tPos.y - startPos.y, z: tPos.z - startPos.z };
     const proj = to.x*dir.x + to.y*dir.y + to.z*dir.z;
     if (proj > 0 && proj <= weapon.range) {
@@ -465,8 +483,7 @@ function performShot(playerId) {
         hitTargetId = id;
         headshot = false;
       }
-      // Голова
-      const headPos = { x: target.position.x, y: CONFIG.PLAYER_HEIGHT - 0.1, z: target.position.z };
+      const headPos = { x: target.position.x, y: CONFIG.PLAYER_HEIGHT - 0.1 - crouchOffset, z: target.position.z };
       const toHead = { x: headPos.x - startPos.x, y: headPos.y - startPos.y, z: headPos.z - startPos.z };
       const projHead = toHead.x*dir.x + toHead.y*dir.y + toHead.z*dir.z;
       if (projHead > 0 && projHead <= weapon.range) {
@@ -487,12 +504,19 @@ function performShot(playerId) {
     let damage = weapon.damage;
     if (headshot) damage *= (weapon.headshotMultiplier || 2);
     damage = Math.round(damage);
-    target.health = clamp(target.health - damage, 0, 100);
+
+    if (matchState.players[hitTargetId]) {
+      applyDamageWithArmor(target, damage);
+    } else {
+      target.health = clamp(target.health - damage, 0, 100);
+    }
+
     if (target.health <= 0) {
       target.health = 0;
       target.state = 'dead';
       target.currentInput = { forward: false, backward: false, left: false, right: false };
       shooter.kills = (shooter.kills || 0) + 1;
+      shooter.currency = (shooter.currency || 0) + 50; // награда за килл
       broadcastDeath(hitTargetId, 'bullet', playerId);
       if (matchState.bots[hitTargetId]) {
         setTimeout(() => {
@@ -507,7 +531,7 @@ function performShot(playerId) {
   return false;
 }
 
-// ===================== ОСТАЛЬНОЕ (loot, pickup, rotate, etc.) =====================
+// ===================== LOOT / SHOP / ROTATE =====================
 function generateLoot() {
   const items = [];
   const weaponKeys = Object.keys(CONFIG.WEAPONS);
@@ -570,7 +594,6 @@ function handleShopBuy(playerId, itemId) {
   player.currency = currency - shopItem.price;
 
   if (shopItem.type === 'weapon') {
-    // Замена оружия
     player.weapon = shopItem.id;
     player.ammo = 30;
     player.lastShotTime = 0;
@@ -605,6 +628,8 @@ function broadcastState() {
       ammo: p.ammo,
       currency: p.currency || 0,
       armor: p.armor || 0,
+      crouching: !!p.crouching,
+      isJumping: !!p.isJumping,
     })),
     bots: bots.map(b => ({
       id: b.id,
@@ -669,13 +694,11 @@ function broadcastWinner(playerId) {
     matchState.status = 'waiting';
     matchState.winner = null;
     matchState.endTimer = null;
-    // Сброс ботов и игроков для нового матча
     for (const id in matchState.players) {
       const p = matchState.players[id];
       p.role = 'player';
       p.state = 'waiting';
     }
-    // Спавним новых ботов
     matchState.bots = spawnBots(CONFIG.MAX_BOTS);
     const participants = Object.values(matchState.players).filter(p => p.role === 'player');
     if (participants.length >= CONFIG.MIN_PLAYERS_TO_START) {
@@ -724,9 +747,7 @@ function startMatch() {
   matchState.winner = null;
   initZone();
   matchState.loot = generateLoot();
-  // Спавним ботов
   matchState.bots = spawnBots(CONFIG.MAX_BOTS);
-  // Позиции для игроков
   const playerIds = players.map(p => p.id);
   const spawnPositions = generateSpawnPositions(playerIds.length);
   playerIds.forEach((id, i) => {
@@ -741,8 +762,11 @@ function startMatch() {
     p.lastShotTime = 0;
     p.lastRotateTime = 0;
     p.currentInput = { forward: false, backward: false, left: false, right: false };
-    p.currency = 100; // начальные деньги
+    p.currency = 100;
     p.armor = 0;
+    p.crouching = false;
+    p.isJumping = false;
+    p.lastJumpTime = 0;
   });
   console.log(`🎮 Матч ${matchState.id} начат! Игроков: ${playerIds.length}, ботов: ${Object.keys(matchState.bots).length}`);
   broadcastState();
@@ -758,7 +782,6 @@ function checkMatchEnd() {
     return;
   }
   if (alivePlayers.length === 0 && aliveBots.length > 0) {
-    // Победили боты? Не объявляем победителя, а завершаем матч ничьей
     broadcastDraw();
     return;
   }
@@ -791,9 +814,12 @@ wss.on('connection', (ws) => {
     lastShotTime: 0,
     lastRotateTime: 0,
     lastPingTime: 0,
+    lastJumpTime: 0,
     currentInput: { forward: false, backward: false, left: false, right: false },
     currency: isSpectator ? 0 : 100,
     armor: 0,
+    crouching: false,
+    isJumping: false,
     _messageCount: 0,
     _lastMessageReset: 0,
   };
@@ -874,6 +900,14 @@ wss.on('connection', (ws) => {
           }
           break;
         }
+        case 'jump': {
+          handleJump(id);
+          break;
+        }
+        case 'crouch': {
+          handleCrouch(id, data.value);
+          break;
+        }
         case 'ping': {
           if (now - player.lastPingTime < 1000 / CONFIG.PING_RATE_LIMIT) break;
           player.lastPingTime = now;
@@ -932,7 +966,6 @@ function gameLoop() {
     const dt = TICK_INTERVAL / 1000;
     if (matchState.status === 'playing') {
       updateZone(dt);
-      // Обновляем ботов
       for (const id in matchState.bots) {
         const bot = matchState.bots[id];
         if (bot.state === 'alive') {
@@ -940,7 +973,6 @@ function gameLoop() {
           applyMovement(id, dt);
         }
       }
-      // Движение игроков
       for (const id in matchState.players) {
         const p = matchState.players[id];
         if (p.role === 'player' && p.state === 'alive') {
